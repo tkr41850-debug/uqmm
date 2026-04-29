@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import os as _os
 import shutil
 import sys
 from asyncio.subprocess import Process
@@ -20,12 +21,17 @@ from typing import Annotated
 
 from cyclopts import App, Parameter
 
+from rich.console import Console
+from rich.table import Table
+
 from uqmm import state
 from uqmm.alpine_drive import drive_install
 from uqmm.builders.alpine import AlpineSeedBuilder
 from uqmm.builders.cloudimg import CloudImageBuilder
 from uqmm.config import VMConfig
+from uqmm.discover import probe
 from uqmm.qemu import process as qemu_process
+from uqmm.qemu import qmp
 from uqmm.qemu.serial import open_serial
 from uqmm.serve import serve_answers_once
 from uqmm.ssh import wait_ready
@@ -233,17 +239,109 @@ def _discover_default_keys() -> list[Path]:
 
 
 @app.command
-def start(name: str, *, wait: bool = False) -> None:
+def start(name: str, *, wait: bool = False) -> int:
     """Boot an existing VM. --wait blocks until SSH responds."""
-    del name, wait
-    raise NotImplementedError("start: phase 4")
+    vm_dir = state.vm_dir(name)
+    if not (vm_dir / "config.json").exists():
+        print(f"no such VM: {name}", file=sys.stderr)
+        return 1
+    cfg = VMConfig.load(vm_dir / "config.json")
+    if cfg.state == "failed":
+        print(f"{name} is in failed state; delete and create again", file=sys.stderr)
+        return 1
+    return asyncio.run(_start(cfg, vm_dir, wait_ssh=wait))
+
+
+async def _start(cfg: VMConfig, vm_dir: Path, *, wait_ssh: bool) -> int:
+    status = await probe(vm_dir)
+    if status in ("starting", "running", "unreachable"):
+        print(f"{cfg.name} is already {status}", file=sys.stderr)
+        return 1
+
+    # Re-run the appropriate builder against cfg+vm_dir to get runtime args.
+    # Builders are pure given (cfg, vm_dir), so this regenerates a consistent
+    # arg list without persisting it in config.json.
+    if cfg.os == "alpine":
+        artifacts = AlpineSeedBuilder().build(cfg, vm_dir)
+    else:
+        artifacts = CloudImageBuilder().build(cfg, vm_dir)
+
+    proc = await _launch_qemu(
+        artifacts.qemu_runtime_args,
+        pidfile=vm_dir / "qemu.pid",
+        stderr_log=vm_dir / "install.log",
+    )
+    if wait_ssh:
+        try:
+            assert cfg.ssh_port is not None
+            await _wait_ssh_ready("127.0.0.1", cfg.ssh_port)
+        except BaseException:
+            await _kill_proc(proc)
+            (vm_dir / "qemu.pid").unlink(missing_ok=True)
+            raise
+    print(f"{cfg.name} started" + (" (ssh ready)" if wait_ssh else ""))
+    return 0
 
 
 @app.command
-def stop(name: str, *, force: bool = False) -> None:
+def stop(name: str, *, force: bool = False) -> int:
     """Graceful QMP system_powerdown; --force escalates to QMP quit."""
-    del name, force
-    raise NotImplementedError("stop: phase 4")
+    vm_dir = state.vm_dir(name)
+    if not (vm_dir / "config.json").exists():
+        print(f"no such VM: {name}", file=sys.stderr)
+        return 1
+    return asyncio.run(_stop(vm_dir, force=force))
+
+
+async def _stop(vm_dir: Path, *, force: bool) -> int:
+    status = await probe(vm_dir)
+    if status in ("not-created", "stopped", "failed"):
+        # Idempotent — already stopped is a success per Docker semantics.
+        return 0
+
+    qmp_sock = vm_dir / "qmp.sock"
+    try:
+        client = await qmp.connect(qmp_sock, timeout=5.0)
+    except (TimeoutError, OSError):
+        # QMP unreachable — fall back to SIGTERM/SIGKILL via pidfile.
+        return await _stop_via_pidfile(vm_dir)
+
+    try:
+        if force:
+            await qmp.quit(client)
+        else:
+            await qmp.system_powerdown(client)
+    finally:
+        with contextlib.suppress(Exception):
+            await client.disconnect()
+
+    # Wait for the QEMU process to actually exit (pid disappears).
+    deadline = asyncio.get_event_loop().time() + (5.0 if force else 30.0)
+    while asyncio.get_event_loop().time() < deadline:
+        if (await probe(vm_dir)) == "stopped":
+            (vm_dir / "qemu.pid").unlink(missing_ok=True)
+            return 0
+        await asyncio.sleep(0.5)
+    # Graceful timed out — escalate.
+    if not force:
+        return await _stop(vm_dir, force=True)
+    # Force timed out (very rare) — fall back to OS-level kill.
+    return await _stop_via_pidfile(vm_dir)
+
+
+async def _stop_via_pidfile(vm_dir: Path) -> int:
+    pidfile = vm_dir / "qemu.pid"
+    try:
+        pid = int(pidfile.read_text().strip())
+    except (ValueError, OSError):
+        pidfile.unlink(missing_ok=True)
+        return 0
+    import signal
+
+    with contextlib.suppress(ProcessLookupError):
+        _os.kill(pid, signal.SIGKILL)
+    pidfile.unlink(missing_ok=True)
+    return 0
 
 
 @app.command
@@ -254,28 +352,46 @@ def delete(name: str) -> None:
 
 
 @app.command
-def status(name: str | None = None) -> None:
+def status(name: str | None = None) -> int:
     """Per-VM state. Without <name>, shows all."""
-    vms = list(state.iter_vm_dirs())
     if name is not None:
-        # Single-VM probe lands in phase 4; until then say "unknown".
-        raise NotImplementedError("status <name>: phase 4")
+        vm_dir = state.vm_dir(name)
+        result = asyncio.run(probe(vm_dir))
+        print(result)
+        return 0 if result in ("running", "stopped", "starting") else 0
+    vms = list(state.iter_vm_dirs())
     if not vms:
         print("no VMs")
-        return
+        return 0
     for d in vms:
-        print(d.name)
+        result = asyncio.run(probe(d))
+        print(f"{d.name}\t{result}")
+    return 0
 
 
 @app.command(name="list")
-def list_cmd() -> None:
+def list_cmd() -> int:
     """Tabular listing of all VMs."""
     vms = list(state.iter_vm_dirs())
     if not vms:
         print("no VMs")
-        return
+        return 0
+    table = Table()
+    table.add_column("name")
+    table.add_column("os/version")
+    table.add_column("status")
+    table.add_column("ssh-port")
     for d in vms:
-        print(d.name)
+        cfg_path = d / "config.json"
+        if not cfg_path.exists():
+            table.add_row(d.name, "?", "?", "?")
+            continue
+        cfg = VMConfig.load(cfg_path)
+        result = asyncio.run(probe(d))
+        port = str(cfg.ssh_port) if cfg.ssh_port is not None else "-"
+        table.add_row(d.name, f"{cfg.os}/{cfg.version}", result, port)
+    Console().print(table)
+    return 0
 
 
 @app.command

@@ -35,8 +35,6 @@ def test_status_zero_vms(
 @pytest.mark.parametrize(
     "cmd",
     [
-        ["start", "vm1"],
-        ["stop", "vm1"],
         ["delete", "vm1"],
         ["ssh", "vm1"],
         ["log", "vm1"],
