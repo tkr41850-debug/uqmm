@@ -1,5 +1,6 @@
 import json
 from pathlib import Path
+from unittest.mock import patch
 
 import pytest
 
@@ -89,6 +90,41 @@ def test_save_and_load(tmp_path: Path) -> None:
     assert path.exists()
     restored = VMConfig.load(path)
     assert restored == cfg
+
+
+def test_C8_save_atomic_via_tmp_rename(tmp_path: Path) -> None:
+    cfg = VMConfig(name="vm1", os="alpine", version="3.21", ssh_port=22500)
+    path = tmp_path / "config.json"
+    written_paths: list[str] = []
+    original_write = Path.write_text
+
+    def track_write(self: Path, text: str, *args: object, **kwargs: object) -> None:
+        written_paths.append(str(self))
+        original_write(self, text, *args, **kwargs)  # type: ignore[arg-type]
+
+    with patch.object(Path, "write_text", track_write):
+        cfg.save(path)
+
+    # write_text is called only once, on the .tmp file (os.replace does the rename)
+    assert len(written_paths) == 1
+    assert written_paths[0].endswith(".tmp")
+    # final file exists with full content; tmp file is gone
+    assert path.exists()
+    assert not Path(written_paths[0]).exists()
+    assert VMConfig.load(path) == cfg
+
+
+def test_C8_save_does_not_truncate_on_failure(tmp_path: Path) -> None:
+    good_cfg = VMConfig(name="vm1", os="alpine", version="3.21", ssh_port=22500)
+    path = tmp_path / "config.json"
+    good_cfg.save(path)
+    original_blob = path.read_text()
+
+    bad_cfg = VMConfig(name="vm1", os="debian", version="13", ssh_port=22600)
+    with patch.object(Path, "write_text", side_effect=OSError("disk full")), pytest.raises(OSError):
+        bad_cfg.save(path)
+
+    assert path.read_text() == original_blob
 
 
 def test_from_json_ignores_unknown_extra_fields() -> None:

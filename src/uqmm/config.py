@@ -6,12 +6,13 @@ See docs/design/config.md for the schema and rationale.
 from __future__ import annotations
 
 import json
+import os
 from dataclasses import asdict, dataclass, field, fields
 from pathlib import Path
 from typing import Any, Literal, Self, get_args
 
 OS = Literal["alpine", "debian", "ubuntu"]
-State = Literal["created", "failed"]
+State = Literal["created", "failed", "creating"]
 
 
 @dataclass
@@ -58,7 +59,9 @@ class VMConfig:
         return cls(**filtered)
 
     def save(self, path: Path) -> None:
-        path.write_text(self.to_json())
+        tmp = path.with_suffix(path.suffix + ".tmp")
+        tmp.write_text(self.to_json())
+        os.replace(tmp, path)
 
     @classmethod
     def load(cls, path: Path) -> Self:
