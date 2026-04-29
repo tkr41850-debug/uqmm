@@ -84,7 +84,7 @@ class SeedBuilder(Protocol):
 - `qemu_install_args`: `-cdrom alpine-virt-VER.iso -drive file=disk.qcow2,if=virtio -serial unix:SERIAL_SOCK,server=on,wait=on,reconnect-ms=1000 -no-reboot`
 - `qemu_runtime_args`: `-drive file=disk.qcow2,if=virtio` (no CD)
 
-No ISO rebuild. The custom-ISO/apkovl approach ([alpine-unattended.md](alpine-unattended.md)) remains available as a fallback for offline-only or stricter reproducibility scenarios.
+No ISO rebuild. The custom-ISO/apkovl approach ([alpine-unattended.md](../research/alpine-unattended.md)) remains available as a fallback for offline-only or stricter reproducibility scenarios.
 
 ### `CloudImageBuilder` produces (Debian + Ubuntu, unified)
 
@@ -94,7 +94,7 @@ No ISO rebuild. The custom-ISO/apkovl approach ([alpine-unattended.md](alpine-un
 - `qemu_install_args` is the same as `qemu_runtime_args` — there's no separate install boot. Just: `-drive file=cloudimg.qcow2,if=virtio -drive file=seed.iso,if=virtio,format=raw,readonly=on -no-reboot`.
 - The seed disk can be detached on subsequent boots if desired (cloud-init only reads it on first boot, but leaving it attached is harmless).
 
-The Ubuntu autoinstall ISO + Debian d-i preseed paths remain available as fallbacks (see [iso-install-fallback.md](iso-install-fallback.md)) for compliance / custom-partition / non-cloud-init scenarios.
+The Ubuntu autoinstall ISO + Debian d-i preseed paths remain available as fallbacks (see [iso-install-fallback.md](../research/iso-install-fallback.md)) for compliance / custom-partition / non-cloud-init scenarios.
 
 ## Lifecycle layer (fully shared)
 
