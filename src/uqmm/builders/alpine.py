@@ -88,7 +88,31 @@ class AlpineSeedBuilder:
 
         build_disk(disk, size_gb=cfg.disk_size_gb)
         answers.write_text(render_answers(cfg))
+        (vm_dir / "state.seeded").touch()
 
+        install = _qemu_install_args(cfg, vm_dir, disk, iso)
+        runtime = _qemu_runtime_args(cfg, vm_dir, disk)
+        return InstallArtifacts(
+            qemu_install_args=install,
+            qemu_runtime_args=runtime,
+            seed_paths=[disk, answers],
+        )
+
+    def rebuild_seed(self, cfg: VMConfig, vm_dir: Path) -> InstallArtifacts:
+        """Regenerate answers from current cfg, reuse existing disk.
+
+        Used when resuming from state.seeded — disk exists, install hasn't run.
+        Does not call build_disk, so the on-disk qcow2 is preserved.
+        """
+        if cfg.ssh_port is None:
+            raise ValueError("ssh_port must be resolved before rebuild_seed")
+        disk = vm_dir / "disk.qcow2"
+        answers = vm_dir / "answers"
+        if not disk.exists():
+            raise FileNotFoundError(f"missing disk for seeded resume: {disk}")
+        iso = resolve_image(cfg)
+        answers.write_text(render_answers(cfg))
+        (vm_dir / "state.seeded").touch()
         install = _qemu_install_args(cfg, vm_dir, disk, iso)
         runtime = _qemu_runtime_args(cfg, vm_dir, disk)
         return InstallArtifacts(

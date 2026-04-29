@@ -127,3 +127,67 @@ def test_build_requires_ssh_port(tmp_path: Path) -> None:
     vm_dir.mkdir(parents=True)
     with pytest.raises(ValueError, match="ssh_port"):
         AlpineSeedBuilder().build(cfg, vm_dir)
+
+
+def _base_cfg(ssh_port: int = 22500) -> VMConfig:
+    return VMConfig(
+        name="al321",
+        os="alpine",  # pyright: ignore[reportArgumentType]
+        version="3.21",
+        ssh_port=ssh_port,
+        ssh_authorized_keys=["ssh-ed25519 AAA"],
+    )
+
+
+def test_R10_build_writes_seeded_marker(tmp_path: Path) -> None:
+    iso = tmp_path / "alpine.iso"
+    iso.write_bytes(b"fake-iso")
+    vm_dir = tmp_path / "vms" / "al321"
+    vm_dir.mkdir(parents=True)
+    with (
+        patch("uqmm.builders.alpine.resolve_image", return_value=iso),
+        patch("uqmm.builders.alpine.build_disk"),
+    ):
+        AlpineSeedBuilder().build(_base_cfg(), vm_dir)
+    assert (vm_dir / "state.seeded").exists()
+
+
+def test_R10_marker_idempotent(tmp_path: Path) -> None:
+    iso = tmp_path / "alpine.iso"
+    iso.write_bytes(b"fake-iso")
+    vm_dir = tmp_path / "vms" / "al321"
+    vm_dir.mkdir(parents=True)
+    cfg = _base_cfg()
+    with (
+        patch("uqmm.builders.alpine.resolve_image", return_value=iso),
+        patch("uqmm.builders.alpine.build_disk"),
+    ):
+        AlpineSeedBuilder().build(cfg, vm_dir)
+        AlpineSeedBuilder().build(cfg, vm_dir)  # second call — no error
+    assert (vm_dir / "state.seeded").exists()
+
+
+def test_R10_rebuild_seed_regenerates_answers_without_disk(tmp_path: Path) -> None:
+    iso = tmp_path / "alpine.iso"
+    iso.write_bytes(b"fake-iso")
+    vm_dir = tmp_path / "vms" / "al321"
+    vm_dir.mkdir(parents=True)
+    disk = vm_dir / "disk.qcow2"
+    disk.write_bytes(b"existing-disk")
+
+    cfg_new = VMConfig(
+        name="al321",
+        os="alpine",  # pyright: ignore[reportArgumentType]
+        version="3.21",
+        ssh_port=22500,
+        ssh_authorized_keys=["ssh-ed25519 BBB new@host"],
+    )
+    with patch("uqmm.builders.alpine.resolve_image", return_value=iso):
+        artifacts = AlpineSeedBuilder().rebuild_seed(cfg_new, vm_dir)
+
+    answers = (vm_dir / "answers").read_text()
+    assert "ssh-ed25519 BBB new@host" in answers
+    # disk must still be the original — not re-created
+    assert disk.read_bytes() == b"existing-disk"
+    assert "-cdrom" in artifacts.qemu_install_args
+    assert (vm_dir / "state.seeded").exists()

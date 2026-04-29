@@ -26,6 +26,7 @@ from rich.table import Table
 from uqmm import state
 from uqmm.alpine_drive import drive_install
 from uqmm.builders.alpine import AlpineSeedBuilder
+from uqmm.builders.base import InstallArtifacts
 from uqmm.builders.cloudimg import CloudImageBuilder
 from uqmm.config import VMConfig
 from uqmm.discover import probe
@@ -227,7 +228,7 @@ def _handle_existing_vm_dir(
             new_cfg.state = "creating"
             new_cfg.save(vm_dir / "config.json")
             if os == "alpine":
-                return asyncio.run(_create_alpine(new_cfg, vm_dir))
+                return asyncio.run(_resume_alpine(new_cfg, vm_dir, saved))
             return asyncio.run(_create_cloudimg(new_cfg, vm_dir))
     except state.CreateInProgressError:
         print(f"create already in progress for {name}", file=sys.stderr)
@@ -299,22 +300,18 @@ async def _create_cloudimg(cfg: VMConfig, vm_dir: Path) -> int:
     return 0
 
 
-async def _create_alpine(cfg: VMConfig, vm_dir: Path) -> int:
-    """Drive the alpine branch: ISO install over serial, then runtime relaunch."""
+async def _run_alpine_install(cfg: VMConfig, vm_dir: Path, artifacts: InstallArtifacts) -> None:
+    """Drive the pexpect install phase. Touches state.installed on clean exit."""
+    answers_text = (vm_dir / "answers").read_text()
+    answers = serve_answers_once(answers_text)
     proc: Process | None = None
-    answers = None
     try:
-        artifacts = AlpineSeedBuilder().build(cfg, vm_dir)
-        answers_text = (vm_dir / "answers").read_text()
-        answers = serve_answers_once(answers_text)
         proc = await _launch_qemu(
             artifacts.qemu_install_args,
             pidfile=vm_dir / "qemu.pid",
             stderr_log=vm_dir / "install.log",
         )
         spawn = await open_serial(vm_dir / "serial.sock", vm_dir / "install.log")
-        # pexpect is sync; run drive_install on the executor so the loop
-        # stays responsive (qmp listening, etc.).
         loop = asyncio.get_running_loop()
         await loop.run_in_executor(
             None,
@@ -324,11 +321,26 @@ async def _create_alpine(cfg: VMConfig, vm_dir: Path) -> int:
         )
         # Installer typed `reboot`; -no-reboot makes QEMU exit on guest reboot.
         _ = await proc.wait()
-        proc = None  # don't reap below — already exited
+        proc = None  # already exited — don't reap below
         (vm_dir / "qemu.pid").unlink(missing_ok=True)
-        # Relaunch with runtime args (no CD, no -no-reboot) and wait for SSH.
+        (vm_dir / "state.installed").touch()
+    except BaseException:
+        if proc is not None:
+            await _kill_proc(proc)
+        (vm_dir / "qemu.pid").unlink(missing_ok=True)
+        raise
+    finally:
+        # Stop the answers server whether install succeeded or not.
+        answers.stop()
+
+
+async def _run_alpine_runtime(cfg: VMConfig, vm_dir: Path) -> None:
+    """Launch runtime QEMU (no CD, no -no-reboot) and wait for SSH. Raises on failure."""
+    proc: Process | None = None
+    try:
+        runtime_args = AlpineSeedBuilder().runtime_args(cfg, vm_dir)
         proc = await _launch_qemu(
-            artifacts.qemu_runtime_args,
+            runtime_args,
             pidfile=vm_dir / "qemu.pid",
             stderr_log=vm_dir / "install.log",
         )
@@ -338,17 +350,66 @@ async def _create_alpine(cfg: VMConfig, vm_dir: Path) -> int:
         if proc is not None:
             await _kill_proc(proc)
         (vm_dir / "qemu.pid").unlink(missing_ok=True)
+        raise
+
+
+def _seed_fields_differ(saved: VMConfig, new: VMConfig) -> bool:
+    """True when setup-alpine-consumed fields changed (user, hostname, or keys)."""
+    if saved.user != new.user or saved.hostname != new.hostname:
+        return True
+    return sorted(saved.ssh_authorized_keys) != sorted(new.ssh_authorized_keys)
+
+
+async def _create_alpine(cfg: VMConfig, vm_dir: Path) -> int:
+    """Drive the alpine branch: ISO install over serial, then runtime relaunch."""
+    try:
+        artifacts = AlpineSeedBuilder().build(cfg, vm_dir)
+        await _run_alpine_install(cfg, vm_dir, artifacts)
+        await _run_alpine_runtime(cfg, vm_dir)
+    except BaseException:
         cfg.state = "failed"
         cfg.save(vm_dir / "config.json")
         raise
-    finally:
-        # Unconditionally stop the answers server — on the success path it
-        # already self-shut-down after the wget; on the failure path the guest
-        # may never have fetched, leaving serve_forever blocked otherwise.
-        if answers is not None:
-            answers.stop()
     cfg.state = "created"
     cfg.save(vm_dir / "config.json")
+    (vm_dir / "state.seeded").unlink(missing_ok=True)
+    (vm_dir / "state.installed").unlink(missing_ok=True)
+    print(f"{cfg.name} ready: ssh -p {cfg.ssh_port} {cfg.user}@127.0.0.1")
+    return 0
+
+
+async def _resume_alpine(cfg: VMConfig, vm_dir: Path, saved: VMConfig) -> int:
+    """Resume Alpine create from a failed/creating state using checkpoint markers."""
+    installed_marker = vm_dir / "state.installed"
+    seeded_marker = vm_dir / "state.seeded"
+    has_installed = installed_marker.exists()
+    has_seeded = seeded_marker.exists()
+
+    if has_installed and _seed_fields_differ(saved, cfg):
+        _print_config_diff(saved, cfg)
+        print(
+            "setup-alpine has already run; SSH keys/user/hostname are baked into the disk.\n"
+            f"To apply new credentials, use `uqmm delete {cfg.name} && uqmm create {cfg.name} ...`",
+            file=sys.stderr,
+        )
+        return 1
+
+    try:
+        if not has_installed:
+            if has_seeded:
+                artifacts = AlpineSeedBuilder().rebuild_seed(cfg, vm_dir)
+            else:
+                artifacts = AlpineSeedBuilder().build(cfg, vm_dir)
+            await _run_alpine_install(cfg, vm_dir, artifacts)
+        await _run_alpine_runtime(cfg, vm_dir)
+    except BaseException:
+        cfg.state = "failed"
+        cfg.save(vm_dir / "config.json")
+        raise
+    cfg.state = "created"
+    cfg.save(vm_dir / "config.json")
+    (vm_dir / "state.seeded").unlink(missing_ok=True)
+    (vm_dir / "state.installed").unlink(missing_ok=True)
     print(f"{cfg.name} ready: ssh -p {cfg.ssh_port} {cfg.user}@127.0.0.1")
     return 0
 
