@@ -11,8 +11,8 @@ qemu-img create -f qcow2 alpine.img 20G
 ```
 
 - Both `raw` and `qcow2` create as ordinary files.
-- Sparse by default.
-- Avoid `-o preallocation=full` only if free disk is tight; `metadata` and `falloc` are both rootless.
+- Sparse by default when the host filesystem supports holes.
+- `preallocation=metadata` is qcow2-only; `falloc` works for raw and qcow2. These are format/space tradeoffs, not privilege differences.
 - **Prefer `qcow2`** for snapshots and smaller on-disk size.
 
 ## Mounting guest disk read-only — rootless options
@@ -23,7 +23,7 @@ Rootless alternatives, all from libguestfs:
 
 | Tool | Use case |
 |---|---|
-| `guestmount -a disk.qcow2 -i --ro /tmp/mnt` | FUSE mount, fully rootless. **Recommended for read-only inspection.** |
+| `guestmount -a disk.qcow2 -i --ro /tmp/mnt` | FUSE mount, usually rootless in practice, but depends on host FUSE access. **Recommended for read-only inspection when available.** |
 | `guestfish -a disk.qcow2 -i --ro` | Interactive/scriptable shell, no mount needed. Cleanest for reading config files. |
 | `nbdfuse` | FUSE-exposes an NBD endpoint; combine with `qemu-nbd --socket=...` for a Unix-socket NBD server (no `/dev/nbd` needed). |
 | `libnbd` (Python bindings) | Direct programmatic access (no mount). |
@@ -39,7 +39,7 @@ All three rootless. **`xorriso` is the most portable** and does not require any 
 xorriso -as mkisofs -o seed.iso -V CIDATA -J -r user-data meta-data
 ```
 
-Volume label MUST be uppercase `CIDATA` per cloud-init NoCloud spec.
+`CIDATA` is the conventional spelling in cloud-init docs, but lowercase `cidata` is also accepted and matches this repo's implementation.
 
 ```sh
 # Alternative: genisoimage

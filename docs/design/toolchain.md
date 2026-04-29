@@ -147,7 +147,7 @@ See [cli.md](cli.md) for the full command surface.
 
 1. **Licensing.** `qemu.qmp` (LGPL/GPL) and `pycdlib` (LGPL) are copyleft. For uqmm distributed as a pure-Python MIT package via PyPI, both are compatible — copyleft kicks in only for proprietary redistribution or static single-file binaries. Document in `THIRD_PARTY_LICENSES` when releasing.
 
-2. **CIDATA volume label case.** Use `cidata` (lowercase) in `pycdlib`'s `vol_ident=`. Current cloud-init docs say uppercase `CIDATA` is required, but a 2025 Launchpad bug ([LP #2100232](https://bugs.launchpad.net/ubuntu/+source/ubuntu-raspi-settings/+bug/2100232)) deprecates non-`cidata` variants. Lowercase is the maximally compatible choice. The research docs (written earlier) say uppercase — this is the implementation override.
+2. **CIDATA volume label case.** Use `cidata` (lowercase) in `pycdlib`'s `vol_ident=`. Cloud-init documentation commonly shows uppercase `CIDATA`, but the implementation also accepts lowercase and this repo standardizes on `cidata` for consistency.
 
 3. **YAML 1.1 vs 1.2.** Don't switch to `ruamel.yaml`. cloud-init parses YAML 1.1 where `yes`/`no`/`on`/`off` are booleans; ruamel defaults to 1.2 where they're strings. PyYAML matches cloud-init.
 

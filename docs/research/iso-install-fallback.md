@@ -40,7 +40,7 @@ The `#cloud-config` header and top-level `autoinstall:` key are **required**. Sc
 
 ### Delivery: NoCloud seed ISO
 
-NoCloud requires a filesystem labeled `CIDATA` (ISO9660 or vfat) with `user-data` and `meta-data` files. `meta-data` needs at minimum:
+NoCloud requires a filesystem labeled `cidata` / `CIDATA` (ISO9660 or vfat) with `user-data` and `meta-data` files. `meta-data` needs at minimum:
 
 ```yaml
 instance-id: iid-1
@@ -54,7 +54,7 @@ xorriso -as mkisofs -o seed.iso -V CIDATA -J -r user-data meta-data
 genisoimage -output seed.iso -volid cidata -joliet -rock user-data meta-data
 ```
 
-**Volume label MUST be uppercase `CIDATA`** ([cloud-init NoCloud datasource](https://docs.cloud-init.io/en/latest/reference/datasources/nocloud.html)).
+`CIDATA` is the conventional spelling in docs, but lowercase `cidata` is also valid and matches this repo's implementation/examples ([cloud-init NoCloud datasource](https://docs.cloud-init.io/en/latest/reference/datasources/nocloud.html)).
 
 ### The "Continue with autoinstall? (yes|no)" headache
 
@@ -74,20 +74,20 @@ QEMU launch:
 ```
 -kernel ./vmlinuz
 -initrd ./initrd
--append "autoinstall ds=nocloud;s=/cidata/ console=ttyS0,115200n8"
+-append "autoinstall ds=nocloud console=ttyS0,115200n8"
 -cdrom ubuntu-24.04-live-server-amd64.iso
 -drive file=seed.iso,format=raw,if=virtio
 -drive file=disk.qcow2,if=virtio
 ```
 
-Matches Canonical's own [quickstart](https://canonical-subiquity.readthedocs-hosted.com/en/latest/howto/autoinstall-quickstart.html). Alternative: rebuild ISO with patched `grub.cfg` (more work, lets you keep `-cdrom`-only invocation).
+This keeps the CIDATA-labeled seed drive for autodiscovery while injecting the required `autoinstall` kernel token. Alternative: rebuild ISO with patched `grub.cfg` (more work, lets you keep `-cdrom`-only invocation).
 
 ### HTTP-served autoinstall
 
-Cmdline `ds=nocloud-net;s=http://10.0.2.2:PORT/` (semicolon escaped in GRUB as `\;`):
+For network-served NoCloud, use `ds=nocloud;s=http://10.0.2.2:PORT/` (older cloud-init releases may still document `nocloud-net`). Escape the semicolon in GRUB as `\;`:
 
 ```
-autoinstall console=ttyS0,115200n8 ds=nocloud-net\;s=http://10.0.2.2:PORT/
+autoinstall console=ttyS0,115200n8 ds=nocloud\;s=http://10.0.2.2:PORT/
 ```
 
 Trailing slash on URL is **required**. Run `python3 -m http.server 8000 --bind 0.0.0.0` on the host serving `user-data`/`meta-data`/`network-config`.

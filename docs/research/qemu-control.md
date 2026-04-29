@@ -12,11 +12,11 @@ Add a Unix socket QMP endpoint alongside existing args. Modern QEMU uses explici
 
 `server=on,wait=off` means QEMU listens but does not block boot waiting for a client. TCP form `tcp:127.0.0.1:4444,server=on,wait=off` works identically; **prefer Unix sockets** (no port collisions, easier permissions).
 
-You can have multiple `-qmp` flags simultaneously — useful if you want one socket for orchestration and one for an interactive `qmp-shell`.
+If you need multiple control endpoints, prefer the documented `-chardev ...` + `-mon ...,mode=control` form rather than relying on repeated `-qmp` shorthand.
 
 ## Python client: `qemu.qmp`
 
-The official, currently-maintained PyPI package is **`qemu.qmp`** (note the dot). Source at [gitlab.com/qemu-project/python-qemu-qmp](https://gitlab.com/qemu-project/python-qemu-qmp). Marked alpha but is the reference library. Asyncio-only.
+The official, currently-maintained PyPI package is **`qemu.qmp`** (note the dot). Source at [gitlab.com/qemu-project/python-qemu-qmp](https://gitlab.com/qemu-project/python-qemu-qmp). Marked alpha but is the reference library. Asyncio-first, with a legacy sync compatibility wrapper still documented upstream.
 
 ```sh
 pip install qemu.qmp
@@ -52,11 +52,11 @@ asyncio.run(main())
 
 ## Block device discovery and CD eject
 
-The `-cdrom` shorthand on x86 default machine becomes `ide1-cd0`:
+The `-cdrom` shorthand on x86 default machine becomes `ide1-cd0`, but for automation you should assign an explicit id up front:
 
 ```python
 blocks = await qmp.execute("query-block")
-cd = next(b for b in blocks if b.get("type") == "cdrom" or "cd" in b["device"])
+cd = next(b for b in blocks if b["device"] == "cd0")
 ```
 
 The `device` argument of `eject` is **deprecated since QEMU 2.8** ([deprecated features](https://www.qemu.org/docs/master/about/deprecated.html)) — use `id`:
@@ -113,7 +113,7 @@ Two options:
 
 - **Guest reboot/reset** with `-no-reboot`: QEMU exits cleanly.
 - **Guest poweroff**: QEMU exits regardless of `-no-reboot`.
-- `subsystem-reset` ignores `-no-reboot` (modern equivalent: `-action reboot=shutdown`).
+- `subsystem-reset` is a special case that ignores `-no-reboot`; keep that exception separate from the normal installer reboot path.
 - `-no-shutdown` is orthogonal — pauses-rather-than-exits on poweroff (useful for state inspection; not what you want here).
 
 Both Alpine `setup-alpine` (via apkovl autorun script `reboot` call) and Ubuntu autoinstall do a real `reboot()`, so `-no-reboot` catches them.

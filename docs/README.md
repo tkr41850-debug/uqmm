@@ -14,19 +14,22 @@
 
 | OS family | Path | Time to SSH-ready (TCG) |
 |---|---|---|
-| Alpine | Stock ISO + serial pexpect typing 3 commands at root prompt | 2-4 min |
-| Debian + Ubuntu | Cloud image qcow2 + NoCloud cidata seed | 30-60 s |
+| Alpine | Stock ISO + serial pexpect driving `setup-alpine -ef` over the console | 2-4 min |
+| Debian + Ubuntu | Cloud image qcow2 + NoCloud `cidata` seed | 30-60 s |
 
 ## Working baseline (current manual state)
 
 ```sh
 nice -n 5 qemu-system-x86_64 \
-    -cpu max,+avx -smp 4 -m 16G \
-    -hda ~/vm/alpine.img \
-    -cdrom alpine-virt-3.19.1-x86_64.iso \
+    -accel tcg,thread=multi -cpu max,+avx -smp 4 -m 4G \
+    -drive file=~/vm/alpine.qcow2,if=virtio \
+    -cdrom alpine-virt-3.21.0-x86_64.iso \
     -netdev user,id=mynet0,hostfwd=tcp::5901-:22 \
     -device virtio-net-pci,netdev=mynet0 \
-    -display none -vnc :0
+    -display none \
+    -serial unix:/tmp/serial.sock,server=on,wait=on,reconnect-ms=1000 \
+    -qmp unix:/tmp/qmp.sock,server=on,wait=off \
+    -no-reboot
 ```
 
 After uqmm: `uqmm create alpine-vm --os alpine --version 3.21` returns an SSH-ready VM.

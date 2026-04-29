@@ -101,21 +101,19 @@ Add to `alpine.py`:
 `src/uqmm/alpine_drive.py`:
 
 ```python
-def drive_install(serial: SocketSpawn, answers_url: str, root_password: str | None = None) -> None:
+def drive_install(serial: SocketSpawn, answers_url: str) -> None:
     serial.expect(r"localhost login: ", timeout=180)
     serial.sendline("root")
     serial.expect(r"# ", timeout=10)
     serial.sendline(f"wget -qO /tmp/answers {answers_url} && echo WGET_OK")
     serial.expect(r"WGET_OK", timeout=30)
-    serial.sendline("setup-alpine -ef /tmp/answers")
-    # password prompt(s)
-    serial.expect(r"New password: ", timeout=300)
-    serial.sendline(root_password or "uqmm-disposable")
-    serial.expect(r"Retype password: ", timeout=10)
-    serial.sendline(root_password or "uqmm-disposable")
-    # wait for installer to complete
-    serial.expect(r"Installation is complete", timeout=600)
-    serial.sendline("poweroff")
+    serial.sendline(
+        "export ERASE_DISKS=/dev/vda && "
+        "setup-alpine -ef /tmp/answers && echo UQMM_INSTALL_DONE"
+    )
+    serial.expect(r"UQMM_INSTALL_DONE", timeout=600)
+    serial.expect(r"# ", timeout=30)
+    serial.sendline("reboot")
     # let -no-reboot + SHUTDOWN handle the rest at the orchestration layer
 ```
 

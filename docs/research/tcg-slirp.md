@@ -74,8 +74,8 @@ In your seed directory, place `user-data`, `meta-data`, `network-config` (Ubuntu
 
 Guest cmdline:
 
-- **Ubuntu**: `ds=nocloud-net;s=http://10.0.2.2:8000/` (semicolon escaped as `\;` in GRUB).
-- **Alpine**: `setup-alpine -ef http://10.0.2.2:8000/answers` (called from apkovl autorun script).
+- **Ubuntu**: network-served NoCloud via `ds=nocloud;s=http://10.0.2.2:8000/` (older docs may still show `nocloud-net`; escape the semicolon as `\;` in GRUB).
+- **Alpine**: serve an `answers` file over HTTP, fetch it from the serial/apkovl flow, then run `setup-alpine -ef` locally.
 
 Reliable. No DNS tricks — address by IP.
 

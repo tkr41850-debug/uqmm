@@ -56,7 +56,7 @@ Once `create` resolves a port, it's recorded in `config.json` and reused on ever
 | Package manager | `apk` | `apt` |
 | Default user (pre-uqmm) | `root`, no password (live ISO) | `debian` / `ubuntu` (preconfigured); uqmm overrides via cloud-config `users:` |
 | Default ttyS0? | Yes (alpine-virt cmdline) | Yes (cloud images preconfigured) |
-| Seed delivery | answer file via `wget http://10.0.2.2:8000/answers` typed at root prompt | CIDATA-labeled ISO attached as second virtio drive |
+| Seed delivery | answer file via `wget http://10.0.2.2:8000/answers` typed at root prompt | `cidata`-labeled ISO attached as second virtio drive |
 
 The smart abstraction stops at the **high-level intent** and dispatches to per-technique builders for storage and delivery.
 
@@ -81,7 +81,7 @@ class SeedBuilder(Protocol):
 ### `AlpineSeedBuilder` (stock ISO + serial pexpect)
 
 - `answers` file (from `VMConfig` fields → `KEYMAPOPTS` / `HOSTNAMEOPTS` / `USEROPTS` / `USERSSHKEY` / etc.)
-- A pexpect drive script (typing `wget`, `setup-alpine -ef`, root password, `reboot`).
+- A pexpect drive script (typing `wget`, `setup-alpine -ef`, waiting for completion, `reboot`).
 - A local HTTP server serving the answers file at install time.
 - `qemu_install_args`: `-cdrom alpine-virt-VER.iso -drive file=disk.qcow2,if=virtio -serial unix:SERIAL_SOCK,server=on,wait=on,reconnect-ms=1000 -no-reboot`
 - `qemu_runtime_args`: `-drive file=disk.qcow2,if=virtio` (no CD)
@@ -92,7 +92,7 @@ No ISO rebuild. The custom-ISO/apkovl approach ([alpine-unattended.md](../resear
 
 - Cloud image (`debian-13-genericcloud-amd64.qcow2` / `noble-server-cloudimg-amd64.img`) downloaded to cache and qcow2-rebased to `vm_dir/disk.qcow2`, resized to `disk_size_gb`.
 - `user-data` (cloud-config: hostname, users, ssh keys, packages, runcmd) + `meta-data` (instance-id, local-hostname).
-- `seed.iso` via `xorriso -as mkisofs -V CIDATA ...`.
+- `seed.iso` via `xorriso -as mkisofs -V cidata ...`.
 - `qemu_install_args` is the same as `qemu_runtime_args` — there's no separate install boot. Just: `-drive file=disk.qcow2,if=virtio -drive file=seed.iso,if=virtio,format=raw,readonly=on -no-reboot`.
 - The seed disk can be detached on subsequent boots (cloud-init only reads it on first boot), but leaving it attached is harmless.
 

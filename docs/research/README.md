@@ -22,6 +22,6 @@ Findings from investigating how to install OSes unattended into headless QEMU un
 
 | Blocker | Answer |
 |---|---|
-| No-VNC install for Alpine | Stock ISO + serial pexpect: wait at `localhost login:`, type `root`, fetch answers via `wget`, run `setup-alpine -ef`. Custom-ISO/apkovl is a fallback. |
-| No-VNC install for Debian/Ubuntu | Skip the install entirely — boot a cloud-image qcow2 with a NoCloud cidata seed. ISO install (Subiquity/d-i preseed) is fallback. |
+| No-VNC install for Alpine | Stock ISO + serial pexpect: wait at `localhost login:`, type `root`, fetch answers via `wget`, run `setup-alpine -ef`, wait for completion, reboot. Custom-ISO/apkovl is a fallback. |
+| No-VNC install for Debian/Ubuntu | Skip the install entirely — boot a cloud-image qcow2 with a NoCloud `cidata` seed. ISO install (Subiquity/d-i preseed) is fallback. |
 | Reboot/CD-eject handling (Alpine path) | `-no-reboot` + watch QMP `SHUTDOWN` event + relaunch without install drive. |

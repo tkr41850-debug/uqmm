@@ -36,12 +36,11 @@ APKCACHEOPTS="/var/cache/apk"
 
 **Version drift**: `DEVDOPTS` was added in `alpine-conf` April 2022 ([commit 648d10f](https://github.com/alpinelinux/alpine-conf/commit/648d10f12618f48da9b31bc9e438fdc074d79bfa)); present in every supported release.
 
-## Truly non-interactive? Not quite.
+## Truly non-interactive? Almost.
 
-Even with every field set, `setup-alpine -ef` still prompts for:
+With every field set, `setup-alpine -ef` skips the root-password prompts because `-e` means **empty root password**. The remaining interactive edge is the disk-erase confirmation from `setup-disk`; suppress that with `ERASE_DISKS=/dev/vda`.
 
-1. **Root password** (twice — "New password:" and "Retype password:"). Drive these via pexpect.
-2. **Disk-erase confirmation** — suppress with `ERASE_DISKS=/dev/vda` env var.
+If you drop `-e`, `setup-alpine -f` will ask for `New password:` / `Retype password:` and your serial driver has to answer them.
 
 ## Two viable approaches
 
@@ -87,12 +86,9 @@ c.expect(r":~# ")
 c.sendline(
     "wget -O /tmp/answers http://10.0.2.2:8000/answers && "
     "export ERASE_DISKS=/dev/vda && "
-    "setup-alpine -ef /tmp/answers")
-
-# setup-alpine prompts for new root password twice even with -f
-c.expect("New password: ");          c.sendline(ROOT_PW)
-c.expect("Retype password: ");       c.sendline(ROOT_PW)
-c.expect(r":~# ", timeout=600)       # install finishes
+    "setup-alpine -ef /tmp/answers && echo UQMM_INSTALL_DONE")
+c.expect("UQMM_INSTALL_DONE", timeout=600)
+c.expect(r":~# ", timeout=30)
 c.sendline("reboot")
 ```
 
@@ -130,12 +126,13 @@ xorriso -indev original.iso \
         -boot_image any replay
 ```
 
-On boot, Alpine's diskless init auto-discovers `*.apkovl.tar.gz` at the ISO root, applies the overlay, and the OpenRC `local` service runs:
+On boot, Alpine's diskless init auto-discovers the hostname-matched apkovl at the ISO root, applies the overlay, and the OpenRC `local` service runs:
 
 ```sh
 #!/bin/sh
 ERASE_DISKS=/dev/vda timeout 300 setup-alpine -ef /etc/auto-setup-alpine/answers
-echo "root:$(head -c 32 /dev/urandom | base64)" | chpasswd
+# This changes the live environment unless you explicitly target the installed system.
+chroot /mnt sh -c 'echo "root:$(head -c 32 /dev/urandom | base64)" | chpasswd'
 reboot
 ```
 
@@ -144,7 +141,7 @@ reboot
 
 ### Why not other approaches
 
-- **`apkovl=` kernel cmdline** — Alpine *netboot/PXE* feature only ([PXE boot wiki](https://wiki.alpinelinux.org/wiki/PXE_boot)). With standard `-cdrom`, the ISO's bootloader runs and you can't pass kernel args without ISO rebuild or `-kernel`/`-initrd` extraction.
+- **`apkovl=` kernel cmdline** — general diskless-init feature, not just PXE. With standard `-cdrom`, the ISO's bootloader runs and you still can't pass kernel args without ISO rebuild or `-kernel`/`-initrd` extraction.
 - **Second virtual disk with answers** — works as a transport, but you still need either the serial pexpect path or a custom ISO to invoke `setup-alpine`. No standalone advantage.
 
 ## Post-install state
