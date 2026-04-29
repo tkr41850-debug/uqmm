@@ -257,16 +257,14 @@ async def _start(cfg: VMConfig, vm_dir: Path, *, wait_ssh: bool) -> int:
         print(f"{cfg.name} is already {status}", file=sys.stderr)
         return 1
 
-    # Re-run the appropriate builder against cfg+vm_dir to get runtime args.
-    # Builders are pure given (cfg, vm_dir), so this regenerates a consistent
-    # arg list without persisting it in config.json.
-    if cfg.os == "alpine":
-        artifacts = AlpineSeedBuilder().build(cfg, vm_dir)
-    else:
-        artifacts = CloudImageBuilder().build(cfg, vm_dir)
+    # IMPORTANT: do NOT call builder.build() here — that would rerun
+    # prepare_disk / build_disk and clobber the installed qcow2. Use
+    # runtime_args() which reconstructs args from existing on-disk artifacts.
+    builder = AlpineSeedBuilder() if cfg.os == "alpine" else CloudImageBuilder()
+    runtime_args = builder.runtime_args(cfg, vm_dir)
 
     proc = await _launch_qemu(
-        artifacts.qemu_runtime_args,
+        runtime_args,
         pidfile=vm_dir / "qemu.pid",
         stderr_log=vm_dir / "install.log",
     )
@@ -350,11 +348,10 @@ def delete(name: str) -> int:
     if not vm_dir.exists():
         print(f"no such VM: {name}", file=sys.stderr)
         return 1
-    # Stop is idempotent — safe to call even if the VM is already stopped.
-    rc = asyncio.run(_stop(vm_dir, force=False))
-    if rc != 0:
-        print(f"could not stop {name}; refusing to delete", file=sys.stderr)
-        return rc
+    # Stop is idempotent — safe to call even if already stopped. _stop
+    # always returns 0 (escalating to SIGKILL as last resort), so we
+    # don't need to check it.
+    _ = asyncio.run(_stop(vm_dir, force=False))
     shutil.rmtree(vm_dir)
     print(f"{name} deleted")
     return 0
@@ -416,6 +413,11 @@ def ssh(
     cfg = VMConfig.load(vm_dir / "config.json")
     if cfg.ssh_port is None:
         print(f"{name} has no SSH port allocated", file=sys.stderr)
+        return 1
+    status = asyncio.run(probe(vm_dir))
+    if status not in ("running", "unreachable"):
+        # `unreachable` still gets the exec — user might be debugging.
+        print(f"{name} is {status}; start it first", file=sys.stderr)
         return 1
     argv = [
         "ssh",

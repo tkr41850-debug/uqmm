@@ -84,6 +84,16 @@ class AlpineSeedBuilder:
             seed_paths=[disk, answers],
         )
 
+    def runtime_args(self, cfg: VMConfig, vm_dir: Path) -> list[str]:
+        """Reconstruct runtime QEMU args without rebuilding the disk.
+
+        Used by `uqmm start` — calling build() again would `qemu-img create`
+        a fresh blank disk and lose the installed system.
+        """
+        if cfg.ssh_port is None:
+            raise ValueError("ssh_port must be resolved before runtime_args")
+        return _qemu_runtime_args(cfg, vm_dir, vm_dir / "disk.qcow2")
+
 
 def _common_args(cfg: VMConfig, vm_dir: Path, *, smp: int, mem_mb: int) -> list[str]:
     assert cfg.ssh_port is not None

@@ -150,6 +150,17 @@ class CloudImageBuilder:
             seed_paths=[disk, seed],
         )
 
+    def runtime_args(self, cfg: VMConfig, vm_dir: Path) -> list[str]:
+        """Reconstruct runtime QEMU args from cfg + vm_dir without touching disk.
+
+        Used by `uqmm start` — re-running build() would clobber the installed
+        disk via prepare_disk(). The seed.iso and disk.qcow2 already exist on
+        disk from the original create.
+        """
+        if cfg.ssh_port is None:
+            raise ValueError("ssh_port must be resolved before runtime_args")
+        return _qemu_args(cfg, vm_dir, vm_dir / "disk.qcow2", vm_dir / "seed.iso")
+
 
 def _qemu_args(cfg: VMConfig, vm_dir: Path, disk: Path, seed: Path) -> list[str]:
     # -no-reboot: a guest reboot during create is almost always cloud-init

@@ -3,7 +3,6 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-from uqmm.builders.base import InstallArtifacts
 from uqmm.cli import main
 from uqmm.config import VMConfig
 
@@ -113,13 +112,11 @@ def test_start_launches_qemu_without_wait(monkeypatch: pytest.MonkeyPatch, tmp_p
     monkeypatch.setenv("XDG_DATA_HOME", str(tmp_path / "data"))
     monkeypatch.setenv("XDG_CACHE_HOME", str(tmp_path / "cache"))
     _make_vm(tmp_path)
-    art = InstallArtifacts(qemu_install_args=[], qemu_runtime_args=["qemu-system-x86_64"])
+    builder = MagicMock()
+    builder.runtime_args = MagicMock(return_value=["qemu-system-x86_64"])
     with (
         patch("uqmm.cli.probe", new=AsyncMock(return_value="stopped")),
-        patch(
-            "uqmm.cli.CloudImageBuilder",
-            return_value=MagicMock(build=MagicMock(return_value=art)),
-        ),
+        patch("uqmm.cli.CloudImageBuilder", return_value=builder),
         patch("uqmm.cli._launch_qemu", new=AsyncMock(return_value=MagicMock())) as launch,
         patch("uqmm.cli._wait_ssh_ready", new=AsyncMock()) as wait_ssh,
     ):
@@ -127,19 +124,21 @@ def test_start_launches_qemu_without_wait(monkeypatch: pytest.MonkeyPatch, tmp_p
     assert rc == 0
     launch.assert_awaited_once()
     wait_ssh.assert_not_called()
+    # Critical: start must NOT call builder.build() — that would clobber
+    # disk.qcow2 by re-running prepare_disk.
+    builder.build.assert_not_called()
+    builder.runtime_args.assert_called_once()
 
 
 def test_start_with_wait_polls_ssh(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     monkeypatch.setenv("XDG_DATA_HOME", str(tmp_path / "data"))
     monkeypatch.setenv("XDG_CACHE_HOME", str(tmp_path / "cache"))
     _make_vm(tmp_path)
-    art = InstallArtifacts(qemu_install_args=[], qemu_runtime_args=["qemu-system-x86_64"])
+    builder = MagicMock()
+    builder.runtime_args = MagicMock(return_value=["qemu-system-x86_64"])
     with (
         patch("uqmm.cli.probe", new=AsyncMock(return_value="stopped")),
-        patch(
-            "uqmm.cli.CloudImageBuilder",
-            return_value=MagicMock(build=MagicMock(return_value=art)),
-        ),
+        patch("uqmm.cli.CloudImageBuilder", return_value=builder),
         patch("uqmm.cli._launch_qemu", new=AsyncMock(return_value=MagicMock())),
         patch("uqmm.cli._wait_ssh_ready", new=AsyncMock()) as wait_ssh,
     ):
@@ -264,7 +263,10 @@ def test_ssh_execs_ssh_with_correct_args(monkeypatch: pytest.MonkeyPatch, tmp_pa
         captured["file"] = [file]
         captured["argv"] = argv
 
-    with patch("uqmm.cli._os.execvp", side_effect=fake_execvp):
+    with (
+        patch("uqmm.cli._os.execvp", side_effect=fake_execvp),
+        patch("uqmm.cli.probe", new=AsyncMock(return_value="running")),
+    ):
         rc = main(["ssh", "vm1"])
     assert rc == 0
     assert captured["file"] == ["ssh"]
@@ -284,10 +286,25 @@ def test_ssh_passthrough_args(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -
     def fake_execvp(file: str, argv: list[str]) -> None:
         captured["argv"] = argv
 
-    with patch("uqmm.cli._os.execvp", side_effect=fake_execvp):
+    with (
+        patch("uqmm.cli._os.execvp", side_effect=fake_execvp),
+        patch("uqmm.cli.probe", new=AsyncMock(return_value="running")),
+    ):
         rc = main(["ssh", "vm1", "uname", "-a"])
     assert rc == 0
     assert captured["argv"][-2:] == ["uname", "-a"]
+
+
+def test_ssh_refuses_stopped_vm(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    monkeypatch.setenv("XDG_DATA_HOME", str(tmp_path / "data"))
+    _make_vm(tmp_path)
+    with (
+        patch("uqmm.cli.probe", new=AsyncMock(return_value="stopped")),
+        patch("uqmm.cli._os.execvp") as execvp,
+    ):
+        rc = main(["ssh", "vm1"])
+    assert rc != 0
+    execvp.assert_not_called()
 
 
 def test_ssh_missing_vm(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
