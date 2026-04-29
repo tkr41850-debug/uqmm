@@ -56,7 +56,7 @@ Add `.gitignore` for `__pycache__/`, `.pytest_cache/`, `.ruff_cache/`, `.venv/`,
 
 - `data_root() -> Path` — `$XDG_DATA_HOME/uqmm` (default `~/.local/share/uqmm`).
 - `cache_root() -> Path` — `$XDG_CACHE_HOME/uqmm` (default `~/.cache/uqmm`).
-- `vm_dir(name) -> Path`, `image_cache_dir() -> Path`. Create on first access.
+- `vm_dir(name) -> Path`, `image_cache_dir() -> Path`. Pure path computation — callers `mkdir(exist_ok=True)` when they need to create.
 - `iter_vm_dirs() -> Iterator[Path]` — yields existing VM dirs.
 - `pick_ssh_port(occupied: set[int], lo: int = 22000, hi: int = 23000) -> int` — for each candidate not in `occupied`, attempt `socket.socket().bind(("127.0.0.1", port))`; first success wins. Raise `RuntimeError` if exhausted.
 - `read_occupied_ports() -> set[int]` — scan `iter_vm_dirs()` for `config.json`, collect their `ssh_port`.
