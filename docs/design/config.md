@@ -104,8 +104,8 @@ launch_install_qemu(artifacts.qemu_install_args, qmp_sock, serial_path)
   └─ Cloud image: poll SSH; QEMU stays running (no second-stage relaunch)
 launch_runtime_qemu(artifacts.qemu_runtime_args, qmp_sock, hostfwd_port)
   ├─ Alpine only: relaunch without install drive
-  ├─ Poll SSH on 127.0.0.1:hostfwd_port until ready
-  └─ Return SSH client
+  ├─ Poll SSH on 127.0.0.1:hostfwd_port until banner responds (stdlib socket)
+  └─ Return ready signal
 ```
 
 ## Module layout
@@ -126,7 +126,7 @@ uqmm/
     qmp.py               # qemu.qmp wrapper, lifecycle commands
     serial.py            # serial console reader (Alpine path)
     process.py           # subprocess launcher with -no-reboot handling
-  ssh.py                 # paramiko/asyncssh client + readiness polling
+  ssh.py                 # banner-poll readiness (socket) + os.execvp wrapper for `uqmm ssh`
   cli.py                 # argparse / click entry point
 ```
 

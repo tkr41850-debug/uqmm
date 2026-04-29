@@ -21,7 +21,7 @@ def main(argv: list[str] | None = None) -> int:
     return app(argv if argv is not None else sys.argv[1:])
 ```
 
-The `[project.scripts]` entry `uqmm = "uqmm.cli:main"` calls `main()` with no args — falls through to `sys.argv`. Tests call `main(["create", "vm1", "--os", "alpine", ...])` directly and mock `asyncssh`/`subprocess`/`socket`/`pexpect` at the boundaries.
+The `[project.scripts]` entry `uqmm = "uqmm.cli:main"` calls `main()` with no args — falls through to `sys.argv`. Tests call `main(["create", "vm1", "--os", "alpine", ...])` directly and mock `subprocess`/`socket`/`pexpect` at the boundaries.
 
 ## Commands
 
@@ -94,13 +94,15 @@ Tabular: `name`, `os/version`, `status`, `ssh-port`. Same data source as `status
 
 ### `uqmm ssh <name> [-- ssh-args...]`
 
-Resolves port from state, execs:
+Resolves port from state, then `os.execvp("ssh", argv)` so the user's TTY is attached directly to OpenSSH:
 
 ```sh
 ssh -p <port> -o StrictHostKeyChecking=accept-new <user>@127.0.0.1 <ssh-args...>
 ```
 
-`StrictHostKeyChecking=accept-new` so first connection auto-pins the host key without surprising the user, but subsequent mismatches still error.
+`os.execvp` (not `subprocess.run`) replaces the uqmm process image with `ssh` — no Python in the chain once exec succeeds, so signals, terminal resize, and Ctrl-C behavior are identical to running `ssh` directly. `StrictHostKeyChecking=accept-new` auto-pins the host key on first connection without prompting; subsequent mismatches still error.
+
+uqmm uses no Python SSH library — see [toolchain.md § No Python SSH library](toolchain.md#no-python-ssh-library) for rationale.
 
 ### `uqmm log <name> [--follow]`
 

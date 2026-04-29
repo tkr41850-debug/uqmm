@@ -22,14 +22,13 @@ State (April 2026): 3.14.4 is current stable; 3.13 is in bugfix; 3.15 is in alph
 
 `asyncio.TaskGroup` + `ExceptionGroup` (3.11+) are essential for coordinating QMP client + serial console + QEMU subprocess + ephemeral HTTP server cleanly. `except*` splits QMP errors from SSH errors when failures fan in.
 
-Don't use the free-threaded build (`python3.14t`) — `cryptography` (asyncssh transitive dep) re-enables the GIL, and uqmm is I/O-bound asyncio anyway.
+Don't use the free-threaded build (`python3.14t`) — uqmm is I/O-bound asyncio; free-threading doesn't help here.
 
 ## Runtime dependencies
 
 | Library | Version | License | Why |
 |---|---|---|---|
 | `qemu.qmp` | `>=0.0.6` | LGPL/GPL | Only credible QMP client; asyncio-native; published Mar 2026. |
-| `asyncssh` | `>=2.22` | EPL/GPL | Async-native SSH; matches QMP's asyncio shape. Beats paramiko for asyncio-shaped tools. |
 | `pexpect` | `>=4.9` | ISC | Use `pexpect.socket_pexpect.SocketSpawn` for serial socket driving (newer API than `fdpexpect`). Stable; no successor has displaced it. |
 | `cyclopts` | `>=4.4` | Apache-2.0 | Type-hint-driven CLI; first-class `*args`/`**kwargs` passthrough for `uqmm ssh -- ...`. Cleaner than Typer's `context_settings={"allow_extra_args": True}` workaround. |
 | `pycdlib` | `>=1.16` | LGPL | Pure-Python ISO writer; avoids the `xorriso` system dep for CIDATA seeds. |
@@ -37,9 +36,19 @@ Don't use the free-threaded build (`python3.14t`) — `cryptography` (asyncssh t
 | `rich` | `>=13` | MIT | Progress bars; already transitive via cyclopts. |
 | `pyyaml` | `>=6.0.3` | MIT | cloud-init parses YAML 1.1; PyYAML matches. **Don't use ruamel.yaml** — it defaults to 1.2 and silently changes `yes`/`no` semantics. |
 
-**Stdlib for** (no extra deps): HTTP server (one-shot answers serving via `http.server.ThreadingHTTPServer`), subprocess (`asyncio.create_subprocess_exec` for QEMU), logging, JSON (config.json).
+**Stdlib for** (no extra deps): HTTP server (one-shot answers serving via `http.server.ThreadingHTTPServer`), subprocess (`asyncio.create_subprocess_exec` for QEMU), SSH banner-check readiness (`socket.create_connection` + `recv`), logging, JSON (config.json).
 
-**Shell out** (don't wrap in Python): `qemu-img` for offline qcow2 ops; live ops route through QMP (`block_resize`, `blockdev-snapshot-sync`).
+**Shell out** (don't wrap in Python): `qemu-img` for offline qcow2 ops (live ops route through QMP via `block_resize`, `blockdev-snapshot-sync`); `ssh` (system OpenSSH) for `uqmm ssh` interactive sessions via `os.execvp` and any future remote commands. See [No Python SSH library](#no-python-ssh-library) below.
+
+## No Python SSH library
+
+uqmm does **not** use `asyncssh` or `paramiko`. Actual SSH needs are:
+
+1. **Readiness polling** — TCP connect + `recv(64)` + check for `SSH-` banner. Stdlib `socket`, no SSH library.
+2. **`uqmm ssh <name>` interactive session** — must `os.execvp(["ssh", ...])` so the user's TTY attaches directly to the ssh client. A Python SSH library can't replace this — it would have to allocate a PTY, multiplex stdin/stdout/stderr, and reimplement what OpenSSH already does.
+3. **Future programmatic remote commands** (if needed) — `subprocess.run(["ssh", ...])`. Same answer.
+
+Shelling out to system `ssh` keeps `~/.ssh/config`, ssh-agent, ProxyJump, host-key prompts, and the user's already-trusted ssh client all "free." Embedding a Python SSH client would buy async-native SFTP and parallel-SSH-across-VMs — neither needed.
 
 ## Dev dependencies
 
@@ -63,7 +72,6 @@ requires-python = ">=3.13"
 license = "MIT"
 dependencies = [
     "qemu.qmp>=0.0.6",
-    "asyncssh>=2.22",
     "pexpect>=4.9",
     "cyclopts>=4.4",
     "pycdlib>=1.16",
@@ -137,7 +145,7 @@ See [cli.md](cli.md) for the full command surface.
 
 ## Gotchas
 
-1. **Licensing.** `qemu.qmp` (LGPL/GPL), `asyncssh` (EPL/GPL), and `pycdlib` (LGPL) are copyleft. For uqmm distributed as a pure-Python MIT package via PyPI, all three are compatible — copyleft kicks in only for proprietary redistribution or static single-file binaries. Document in `THIRD_PARTY_LICENSES` when releasing.
+1. **Licensing.** `qemu.qmp` (LGPL/GPL) and `pycdlib` (LGPL) are copyleft. For uqmm distributed as a pure-Python MIT package via PyPI, both are compatible — copyleft kicks in only for proprietary redistribution or static single-file binaries. Document in `THIRD_PARTY_LICENSES` when releasing.
 
 2. **CIDATA volume label case.** Use `cidata` (lowercase) in `pycdlib`'s `vol_ident=`. Current cloud-init docs say uppercase `CIDATA` is required, but a 2025 Launchpad bug ([LP #2100232](https://bugs.launchpad.net/ubuntu/+source/ubuntu-raspi-settings/+bug/2100232)) deprecates non-`cidata` variants. Lowercase is the maximally compatible choice. The research docs (written earlier) say uppercase — this is the implementation override.
 
@@ -161,7 +169,6 @@ See [cli.md](cli.md) for the full command surface.
 - [PEP 745 (3.14 release schedule)](https://peps.python.org/pep-0745/)
 - [Python version status](https://devguide.python.org/versions/)
 - [qemu.qmp on PyPI](https://pypi.org/project/qemu.qmp/)
-- [asyncssh on PyPI](https://pypi.org/project/asyncssh/)
 - [pexpect socket_pexpect](https://pexpect.readthedocs.io/en/latest/api/socket_pexpect.html)
 - [cyclopts vs Typer](https://cyclopts.readthedocs.io/en/latest/vs_typer/README.html)
 - [pycdlib on PyPI](https://pypi.org/project/pycdlib/)
