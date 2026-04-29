@@ -12,7 +12,10 @@ See [config.md](config.md) for `VMConfig` schema and [toolchain.md](toolchain.md
 import sys
 from cyclopts import App
 
-app = App(name="uqmm")
+# version_flags=() disables cyclopts' built-in --version flag — without this,
+# `create --version 3.21` is intercepted at the app level, the uqmm version
+# is printed, and the subcommand never runs.
+app = App(name="uqmm", version_flags=())
 
 # @app.command def create(...): ...
 
