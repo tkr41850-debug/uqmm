@@ -2,7 +2,26 @@
 
 uqmm command surface and on-disk state layout.
 
-See [config.md](config.md) for `VMConfig` schema. This doc covers commands, state, and the discovery/lifecycle logic.
+See [config.md](config.md) for `VMConfig` schema and [toolchain.md](toolchain.md) for library + Python version picks. This doc covers commands, state, and the discovery/lifecycle logic.
+
+## Entry point
+
+`uqmm/cli.py` exposes `main()` taking `argv` as a parameter so integration tests can drive the CLI without spawning a subprocess:
+
+```python
+import sys
+from cyclopts import App
+
+app = App(name="uqmm")
+
+# @app.command def create(...): ...
+
+def main(argv: list[str] | None = None) -> int:
+    """Entry point. argv defaults to sys.argv[1:] when called via console-script."""
+    return app(argv if argv is not None else sys.argv[1:])
+```
+
+The `[project.scripts]` entry `uqmm = "uqmm.cli:main"` calls `main()` with no args — falls through to `sys.argv`. Tests call `main(["create", "vm1", "--os", "alpine", ...])` directly and mock `asyncssh`/`subprocess`/`socket`/`pexpect` at the boundaries.
 
 ## Commands
 
