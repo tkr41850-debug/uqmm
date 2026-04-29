@@ -1,16 +1,22 @@
-"""On-disk state: XDG paths and SSH port allocation.
+"""On-disk state: XDG paths, SSH port allocation, and create locking.
 
 See docs/design/cli.md § On-disk state for the directory layout.
 """
 
 from __future__ import annotations
 
+import contextlib
+import fcntl
 import os
 import socket
-from collections.abc import Iterator
+from collections.abc import Generator, Iterator
 from pathlib import Path
 
 from uqmm.config import VMConfig
+
+
+class CreateInProgressError(Exception):
+    """Raised by acquire_create_lock when another process holds the lock."""
 
 
 def data_root() -> Path:
@@ -86,6 +92,30 @@ def is_port_bindable(port: int) -> bool:
             return True
         except OSError:
             return False
+
+
+@contextlib.contextmanager
+def acquire_create_lock(vm_dir: Path) -> Generator[None]:
+    """Hold an exclusive flock on `vm_dir/create.lock` for the duration.
+
+    Raises CreateInProgressError immediately (non-blocking) if the lock is
+    already held by another process. The lock is released when the context
+    manager exits (including on exception or signal — flock state is
+    per-process-fd and disappears when the fd is closed).
+    """
+    lockfile = vm_dir / "create.lock"
+    lockfile.touch()
+    fd = os.open(str(lockfile), os.O_RDWR)
+    try:
+        fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+    except BlockingIOError:
+        os.close(fd)
+        raise CreateInProgressError(f"create already in progress for {vm_dir.name}") from None
+    try:
+        yield
+    finally:
+        fcntl.flock(fd, fcntl.LOCK_UN)
+        os.close(fd)
 
 
 def pick_ssh_port(occupied: set[int], lo: int = 22000, hi: int = 23000) -> int:

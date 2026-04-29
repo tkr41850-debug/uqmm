@@ -143,24 +143,25 @@ def create(
     )
 
     vm_dir.mkdir(parents=True)
-    cfg.save(vm_dir / "config.json")
-    try:
-        if os == "alpine":
-            rc = asyncio.run(_create_alpine(cfg, vm_dir))
-        else:
-            rc = asyncio.run(_create_cloudimg(cfg, vm_dir))
-    except Exception:
-        # Ensure config.json is marked failed even for uncaught exceptions.
-        cfg_path = vm_dir / "config.json"
-        if cfg_path.exists():
-            try:
-                saved = VMConfig.load(cfg_path)
-                if saved.state == "creating":
-                    cfg.state = "failed"
-                    cfg.save(cfg_path)
-            except Exception:
-                pass
-        raise
+    with state.acquire_create_lock(vm_dir):
+        cfg.save(vm_dir / "config.json")
+        try:
+            if os == "alpine":
+                rc = asyncio.run(_create_alpine(cfg, vm_dir))
+            else:
+                rc = asyncio.run(_create_cloudimg(cfg, vm_dir))
+        except Exception:
+            # Ensure config.json is marked failed even for uncaught exceptions.
+            cfg_path = vm_dir / "config.json"
+            if cfg_path.exists():
+                try:
+                    saved_cfg = VMConfig.load(cfg_path)
+                    if saved_cfg.state == "creating":
+                        cfg.state = "failed"
+                        cfg.save(cfg_path)
+                except Exception:
+                    pass
+            raise
     return rc
 
 
@@ -210,20 +211,27 @@ def _handle_existing_vm_dir(
         print(f"use `uqmm delete {name} && uqmm create {name} ...` to reconfigure", file=sys.stderr)
         return 1
 
-    # failed or creating — resume
-    disk_fields = ("os", "version", "image", "disk_size_gb")
-    for f in disk_fields:
-        if getattr(saved, f) != getattr(new_cfg, f):
-            _print_config_diff(saved, new_cfg)
-            print(f"disk-affecting fields differ; use `uqmm delete {name}` first", file=sys.stderr)
-            return 1
-
-    # Regenerate seed from current args; reuse disk if present
-    new_cfg.state = "creating"
-    new_cfg.save(vm_dir / "config.json")
-    if os == "alpine":
-        return asyncio.run(_create_alpine(new_cfg, vm_dir))
-    return asyncio.run(_create_cloudimg(new_cfg, vm_dir))
+    # failed or creating — try to resume (lock disambiguates concurrent vs stale)
+    try:
+        with state.acquire_create_lock(vm_dir):
+            disk_fields = ("os", "version", "image", "disk_size_gb")
+            for f in disk_fields:
+                if getattr(saved, f) != getattr(new_cfg, f):
+                    _print_config_diff(saved, new_cfg)
+                    print(
+                        f"disk-affecting fields differ; use `uqmm delete {name}` first",
+                        file=sys.stderr,
+                    )
+                    return 1
+            # Regenerate seed from current args; reuse disk if present
+            new_cfg.state = "creating"
+            new_cfg.save(vm_dir / "config.json")
+            if os == "alpine":
+                return asyncio.run(_create_alpine(new_cfg, vm_dir))
+            return asyncio.run(_create_cloudimg(new_cfg, vm_dir))
+    except state.CreateInProgressError:
+        print(f"create already in progress for {name}", file=sys.stderr)
+        return 1
 
 
 def _configs_match(a: VMConfig, b: VMConfig) -> bool:
