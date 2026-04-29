@@ -79,33 +79,33 @@ Statuses: **planned** — written into a phase doc; **in-progress** — actively
 
 | ID | Status | Target | Notes |
 |---|---|---|---|
-| R3 | planned | [01-qol/phase-2](../implementation/01-qol/phase-2-launch.md) | Resize-failure cleanup |
-| C5 | planned | [01-qol/phase-2](../implementation/01-qol/phase-2-launch.md) | Preflight artifact check on `start` |
-| C6 | planned | [01-qol/phase-2](../implementation/01-qol/phase-2-launch.md) | Race `proc.wait()` against SSH wait |
-| C8 | planned | [01-qol/phase-1](../implementation/01-qol/phase-1-state-io.md) | Atomic config writes |
-| C9 | planned | [01-qol/phase-1](../implementation/01-qol/phase-1-state-io.md) | Atomic pidfile writes |
-| C10 | planned | [01-qol/phase-1](../implementation/01-qol/phase-1-state-io.md) | Fail closed on corrupt config |
-| I1 | planned | [01-qol/phase-3](../implementation/01-qol/phase-3-input-validation.md) | "did you mean" version hint |
-| I8 | planned | [01-qol/phase-2](../implementation/01-qol/phase-2-launch.md) | Notice when Alpine install resources are bumped |
-| I9 | planned | [01-qol/phase-3](../implementation/01-qol/phase-3-input-validation.md) | vcpus range check |
-| I10 | planned | [01-qol/phase-3](../implementation/01-qol/phase-3-input-validation.md) | Bind-probe explicit ports |
-| I12 | planned | [01-qol/phase-3](../implementation/01-qol/phase-3-input-validation.md) | Catch missing key files |
-| I15 | planned | [01-qol/phase-3](../implementation/01-qol/phase-3-input-validation.md) | VM-name validation |
-| P1 | planned | [01-qol/phase-2](../implementation/01-qol/phase-2-launch.md) | Allow `start` on `unreachable` |
-| P3 | planned | [01-qol/phase-2](../implementation/01-qol/phase-2-launch.md) | Drop `-no-reboot` from runtime args |
-| P10 | planned | [01-qol/phase-1](../implementation/01-qol/phase-1-state-io.md) | Tolerate one corrupt config in `list`/`status` |
-| R14 | planned | [01-qol/phase-4](../implementation/01-qol/phase-4-rerunnable-create.md) | Idempotent success when config matches |
-| R5 | planned | [01-qol/phase-4](../implementation/01-qol/phase-4-rerunnable-create.md) | `creating` state + state-aware retry |
-| R1 | planned | [01-qol/phase-4](../implementation/01-qol/phase-4-rerunnable-create.md) | Don't mark failed if no work done |
+| C8 | fixed | [01-qol/phase-1](../implementation/01-qol/phase-1-state-io.md) | Atomic config writes |
+| C9 | fixed | [01-qol/phase-1](../implementation/01-qol/phase-1-state-io.md) | Atomic pidfile writes |
+| C10 | fixed | [01-qol/phase-1](../implementation/01-qol/phase-1-state-io.md) | Fail closed on corrupt config |
+| P10 | fixed | [01-qol/phase-1](../implementation/01-qol/phase-1-state-io.md) | Tolerate one corrupt config in `list`/`status` |
+| R3 | fixed | [01-qol/phase-2](../implementation/01-qol/phase-2-launch.md) | Resize-failure cleanup |
+| C5 | fixed | [01-qol/phase-2](../implementation/01-qol/phase-2-launch.md) | Preflight artifact check on `start` |
+| C6 | fixed | [01-qol/phase-2](../implementation/01-qol/phase-2-launch.md) | Race `proc.wait()` against SSH wait |
+| I8 | fixed | [01-qol/phase-2](../implementation/01-qol/phase-2-launch.md) | Notice when Alpine install resources are bumped |
+| P1 | fixed | [01-qol/phase-2](../implementation/01-qol/phase-2-launch.md) | Allow `start` on `unreachable` |
+| P3 | fixed | [01-qol/phase-2](../implementation/01-qol/phase-2-launch.md) | Drop `-no-reboot` from runtime args |
+| I1 | fixed | [01-qol/phase-3](../implementation/01-qol/phase-3-input-validation.md) | "did you mean" version hint |
+| I9 | fixed | [01-qol/phase-3](../implementation/01-qol/phase-3-input-validation.md) | vcpus range check |
+| I10 | fixed | [01-qol/phase-3](../implementation/01-qol/phase-3-input-validation.md) | Bind-probe explicit ports |
+| I12 | fixed | [01-qol/phase-3](../implementation/01-qol/phase-3-input-validation.md) | Catch missing key files |
+| I15 | fixed | [01-qol/phase-3](../implementation/01-qol/phase-3-input-validation.md) | VM-name validation |
+| R1 | fixed | [01-qol/phase-4](../implementation/01-qol/phase-4-rerunnable-create.md) | Don't mark failed if no work done |
+| R5 | fixed | [01-qol/phase-4](../implementation/01-qol/phase-4-rerunnable-create.md) | `creating` state + state-aware retry + flock |
+| R6 | fixed | [01-qol/phase-4](../implementation/01-qol/phase-4-rerunnable-create.md) | R5's flock catches the concurrent-create race |
+| R14 | fixed | [01-qol/phase-4](../implementation/01-qol/phase-4-rerunnable-create.md) | Idempotent success when config matches |
 | R10 | planned | [01-qol/phase-5](../implementation/01-qol/phase-5-alpine-resume.md) | Resume Alpine install on retry |
 | R11 | planned | [01-qol/phase-5](../implementation/01-qol/phase-5-alpine-resume.md) | "installed" checkpoint marker |
 | R12 | planned | [01-qol/phase-5](../implementation/01-qol/phase-5-alpine-resume.md) | Re-attempt runtime relaunch + SSH wait |
 | R2, R9 | deferred | — | Hard-crash safety; needs durable creating-state + repair command |
 | R4, R7, R8, I11 | deferred | — | Port allocation TOCTOU; revisit if multi-VM workflows hit it often |
-| R6 | deferred | — | Folded into R5 phase indirectly (lock catches the race) |
-| R13 | deferred | — | Surfaces as SSH timeout; C6 will at least make it fast-fail |
+| R13 | deferred | — | Surfaces as SSH timeout; C6 makes it fast-fail but not automatic retry |
 | R15, R16 | deferred | — | Seed regeneration + instance-id rotation; revisit after R14/R5 land |
-| C1, C2 | deferred | — | Folded into R5 phase indirectly (creating state + lock) |
+| C1, C2 | deferred | — | lock doesn't block `stop`/`delete` during create; separate solution needed |
 | C3, C4, C7, C11 | deferred | — | Lifecycle race polish |
 | I2, I3, I4, I5, I6, I7, I13, I14 | deferred | — | Validation polish; nice-to-have once core retry UX lands |
 | P2, P4, P5, P6, P7, P8, P9, P11 | deferred | — | UX polish; not on near roadmap |

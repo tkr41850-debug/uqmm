@@ -89,7 +89,9 @@ Per-VM state. Without `<name>`, shows all VMs.
 | `starting` | PID alive; QMP socket not yet responding. |
 | `running` | PID alive; QMP responds; SSH port answers SSH banner. |
 | `unreachable` | PID alive; QMP responds; SSH does not answer. |
-| `failed` | Provisioning failed during `create`; needs `delete` + retry. |
+| `failed` | Provisioning failed during `create`; retry with `uqmm create` or `uqmm delete`. |
+| `creating` | Create in progress (or crashed — probe treats it as `failed`). |
+| `invalid-config` | `config.json` present but unreadable; VM needs manual inspection. |
 
 ### `uqmm list`
 
@@ -160,11 +162,35 @@ If no `--key` is passed, uqmm tries `~/.ssh/id_ed25519.pub`, then `~/.ssh/id_rsa
 
 ## Errors during `create`
 
-If install fails partway (cloud-init error, pexpect timeout, QEMU crash):
+`config.json` carries a `state` field that tracks the create lifecycle:
 
-1. VM directory is left in place so `uqmm log <name>` works for diagnosis.
-2. `config.json` is marked with state `failed`.
-3. `uqmm delete <name>` cleans up.
-4. `uqmm start <name>` refuses on `failed` state — must `delete` and `create` again.
+| `state` | Meaning |
+|---|---|
+| `creating` | Create in progress (or crashed — see lockfile below). |
+| `created` | Provisioning succeeded; VM is usable. |
+| `failed` | Provisioning failed; VM directory kept for `uqmm log` diagnosis. |
 
-This avoids partial-VM zombies that look `stopped` but have never installed.
+### Fresh create
+
+1. `vm_dir/` is created.
+2. A per-process exclusive flock is acquired on `vm_dir/create.lock` for the entire create flow.
+3. `config.json` is written immediately with `state="creating"`.
+4. On success: `state` is flipped to `"created"`.
+5. On failure (handled exception): `state` is flipped to `"failed"`; `uqmm log <name>` shows the serial output.
+
+### Re-running `create <name>` (state machine)
+
+| Existing state | Args match saved? | Action |
+|---|---|---|
+| (no vm_dir) | — | Fresh create. |
+| `created` | yes | Idempotent success: print "already created", suggest `uqmm start --wait`. |
+| `created` | no | Refuse with diff; suggest `uqmm delete <name> && uqmm create <name> …`. |
+| `creating` | — | Try the flock. If held: "create already in progress" (concurrent process). If available: stale crash — resume as `failed`. |
+| `failed` or `creating` (stale) | disk fields match | Resume: hold flock, regenerate seed from current args, reuse disk if present. |
+| `failed` or `creating` (stale) | disk fields differ | Refuse with diff; suggest `uqmm delete`. |
+
+Disk-affecting fields (prevent seed-only resume): `os`, `version`, `image`, `disk_size_gb`.
+
+### `uqmm start` on a failed VM
+
+`start` refuses if `state == "failed"`. Use `uqmm create <name>` (resume) or `uqmm delete <name> && uqmm create <name>` to recover.
