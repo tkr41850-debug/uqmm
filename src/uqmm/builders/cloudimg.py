@@ -21,7 +21,9 @@ def render_user_data(cfg: VMConfig) -> str:
     """Render the cloud-init #cloud-config document for `cfg`.
 
     Disables password auth, skips package upgrade (slow under TCG), creates
-    the configured user with the supplied SSH keys + passwordless sudo.
+    the configured user with the supplied SSH keys + passwordless sudo,
+    enables qemu-guest-agent (preinstalled on Ubuntu, on Debian via runcmd —
+    needed for clean QMP-driven shutdown later).
     """
     user_block: dict[str, Any] = {
         "name": cfg.user,
@@ -35,6 +37,11 @@ def render_user_data(cfg: VMConfig) -> str:
         "ssh_pwauth": False,
         "package_update": False,
         "package_upgrade": False,
+        # `|| true`: package isn't preinstalled on Debian genericcloud;
+        # don't fail the whole first-boot if apt can't reach a mirror.
+        "runcmd": [
+            ["sh", "-c", "systemctl enable --now qemu-guest-agent || true"],
+        ],
     }
     return "#cloud-config\n" + yaml.safe_dump(body, sort_keys=False, default_flow_style=False)
 

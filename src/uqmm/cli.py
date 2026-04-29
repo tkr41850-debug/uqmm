@@ -142,17 +142,33 @@ async def _wait_ssh_ready(host: str, port: int) -> None:
     await wait_ready(host, port)
 
 
+_DEFAULT_KEY_NAMES = ("id_ed25519.pub", "id_rsa.pub")
+
+
 def _load_keys(key_paths: list[Path] | None) -> list[str]:
-    """Read each --key file's contents (one or more keys per file)."""
-    if key_paths is None:
-        return []
+    """Read each --key file's contents (one or more keys per file).
+
+    When `key_paths` is None or empty, fall back to ~/.ssh/id_ed25519.pub then
+    ~/.ssh/id_rsa.pub (per cli.md § SSH key resolution). Returns [] only if no
+    key was supplied or discoverable.
+    """
+    paths = list(key_paths) if key_paths else _discover_default_keys()
     out: list[str] = []
-    for p in key_paths:
+    for p in paths:
         for line in p.read_text().splitlines():
             stripped = line.strip()
             if stripped and not stripped.startswith("#"):
                 out.append(stripped)
     return out
+
+
+def _discover_default_keys() -> list[Path]:
+    ssh_dir = Path.home() / ".ssh"
+    for name in _DEFAULT_KEY_NAMES:
+        candidate = ssh_dir / name
+        if candidate.exists():
+            return [candidate]
+    return []
 
 
 @app.command

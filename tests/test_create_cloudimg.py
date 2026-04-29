@@ -139,6 +139,56 @@ def test_create_marks_failed_on_ssh_timeout(
     assert not pidfile.exists()
 
 
+def test_create_uses_default_id_ed25519_when_no_key_passed(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    monkeypatch.setenv("XDG_DATA_HOME", str(tmp_path / "data"))
+    monkeypatch.setenv("XDG_CACHE_HOME", str(tmp_path / "cache"))
+    fake_home = tmp_path / "home"
+    (fake_home / ".ssh").mkdir(parents=True)
+    (fake_home / ".ssh" / "id_ed25519.pub").write_text("ssh-ed25519 AAA default-host\n")
+    monkeypatch.setenv("HOME", str(fake_home))
+
+    art = InstallArtifacts(qemu_install_args=[], qemu_runtime_args=[])
+    p_builder, p_launch, p_ssh = _patches(art)
+    with p_builder, p_launch, p_ssh:
+        rc = main(["create", "deb13", "--os", "debian", "--version", "13"])
+    assert rc == 0
+    cfg = (tmp_path / "data" / "uqmm" / "vms" / "deb13" / "config.json").read_text()
+    assert "ssh-ed25519 AAA default-host" in cfg
+
+
+def test_create_falls_back_to_id_rsa_when_no_ed25519(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    monkeypatch.setenv("XDG_DATA_HOME", str(tmp_path / "data"))
+    monkeypatch.setenv("XDG_CACHE_HOME", str(tmp_path / "cache"))
+    fake_home = tmp_path / "home"
+    (fake_home / ".ssh").mkdir(parents=True)
+    (fake_home / ".ssh" / "id_rsa.pub").write_text("ssh-rsa BBB rsa-host\n")
+    monkeypatch.setenv("HOME", str(fake_home))
+
+    art = InstallArtifacts(qemu_install_args=[], qemu_runtime_args=[])
+    p_builder, p_launch, p_ssh = _patches(art)
+    with p_builder, p_launch, p_ssh:
+        rc = main(["create", "deb13", "--os", "debian", "--version", "13"])
+    assert rc == 0
+    cfg = (tmp_path / "data" / "uqmm" / "vms" / "deb13" / "config.json").read_text()
+    assert "ssh-rsa BBB rsa-host" in cfg
+
+
+def test_create_errors_when_no_key_and_none_discoverable(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    monkeypatch.setenv("XDG_DATA_HOME", str(tmp_path / "data"))
+    monkeypatch.setenv("XDG_CACHE_HOME", str(tmp_path / "cache"))
+    fake_home = tmp_path / "home"
+    fake_home.mkdir(parents=True)
+    monkeypatch.setenv("HOME", str(fake_home))
+    rc = main(["create", "deb13", "--os", "debian", "--version", "13"])
+    assert rc == 2
+
+
 def test_create_allocates_ssh_port_when_omitted(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:

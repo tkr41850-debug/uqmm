@@ -53,6 +53,16 @@ def test_user_data_skips_package_upgrade() -> None:
     assert parsed.get("package_update", False) is False
 
 
+def test_user_data_enables_qemu_guest_agent() -> None:
+    # qemu-guest-agent isn't preinstalled on Debian genericcloud; the runcmd
+    # makes graceful QMP-driven shutdown work consistently across Debian + Ubuntu.
+    parsed = yaml.safe_load(render_user_data(make_cfg()))
+    runcmd = parsed.get("runcmd")
+    assert isinstance(runcmd, list)
+    flat = repr(runcmd)  # pyright: ignore[reportUnknownArgumentType]
+    assert "qemu-guest-agent" in flat
+
+
 def test_user_data_hostname_from_cfg() -> None:
     parsed = yaml.safe_load(render_user_data(make_cfg(hostname="alpha")))
     assert parsed["hostname"] == "alpha"
