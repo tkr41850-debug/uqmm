@@ -53,24 +53,6 @@ def test_create_cloudimg_happy_path(monkeypatch: pytest.MonkeyPatch, tmp_path: P
     assert "ssh-ed25519 AAA" in text
 
 
-def test_create_alpine_still_unimplemented(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
-    monkeypatch.setenv("XDG_DATA_HOME", str(tmp_path / "data"))
-    monkeypatch.setenv("XDG_CACHE_HOME", str(tmp_path / "cache"))
-    with pytest.raises(NotImplementedError):
-        main(
-            [
-                "create",
-                "al321",
-                "--os",
-                "alpine",
-                "--version",
-                "3.21",
-                "--key",
-                str(_key(tmp_path)),
-            ]
-        )
-
-
 def test_create_refuses_existing_vm_dir(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     monkeypatch.setenv("XDG_DATA_HOME", str(tmp_path / "data"))
     monkeypatch.setenv("XDG_CACHE_HOME", str(tmp_path / "cache"))

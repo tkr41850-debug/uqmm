@@ -3,6 +3,11 @@
 See docs/design/cli.md for the command contract.
 """
 
+# pexpect ships no type stubs; the _Spawn protocol in alpine_drive captures
+# the surface we use, but at the call site basedpyright sees pexpect.SocketSpawn
+# as Unknown. Suppress at module level rather than per-call.
+# pyright: reportUnknownMemberType=false, reportUnknownVariableType=false, reportUnknownArgumentType=false, reportArgumentType=false
+
 from __future__ import annotations
 
 import asyncio
@@ -16,9 +21,13 @@ from typing import Annotated
 from cyclopts import App, Parameter
 
 from uqmm import state
+from uqmm.alpine_drive import drive_install
+from uqmm.builders.alpine import AlpineSeedBuilder
 from uqmm.builders.cloudimg import CloudImageBuilder
 from uqmm.config import VMConfig
 from uqmm.qemu import process as qemu_process
+from uqmm.qemu.serial import open_serial
+from uqmm.serve import serve_answers_once
 from uqmm.ssh import wait_ready
 
 # version_flags=() disables cyclopts' built-in --version (which would otherwise
@@ -81,10 +90,9 @@ def create(
         hostname=hostname,
     )
 
-    if os == "alpine":
-        raise NotImplementedError("alpine create: phase 3")
-
     vm_dir.mkdir(parents=True)
+    if os == "alpine":
+        return asyncio.run(_create_alpine(cfg, vm_dir))
     return asyncio.run(_create_cloudimg(cfg, vm_dir))
 
 
@@ -110,6 +118,56 @@ async def _create_cloudimg(cfg: VMConfig, vm_dir: Path) -> int:
         cfg.state = "failed"
         cfg.save(vm_dir / "config.json")
         raise
+    cfg.save(vm_dir / "config.json")
+    print(f"{cfg.name} ready: ssh -p {cfg.ssh_port} {cfg.user}@127.0.0.1")
+    return 0
+
+
+async def _create_alpine(cfg: VMConfig, vm_dir: Path) -> int:
+    """Drive the alpine branch: ISO install over serial, then runtime relaunch."""
+    proc: Process | None = None
+    answers_thread = None
+    try:
+        artifacts = AlpineSeedBuilder().build(cfg, vm_dir)
+        answers_text = (vm_dir / "answers").read_text()
+        port, answers_thread = serve_answers_once(answers_text)
+        proc = await _launch_qemu(
+            artifacts.qemu_install_args,
+            pidfile=vm_dir / "qemu.pid",
+            stderr_log=vm_dir / "install.log",
+        )
+        spawn = await open_serial(vm_dir / "serial.sock", vm_dir / "install.log")
+        # pexpect is sync; run drive_install on the executor so the loop
+        # stays responsive (qmp listening, etc.).
+        loop = asyncio.get_running_loop()
+        await loop.run_in_executor(
+            None,
+            drive_install,
+            spawn,
+            f"http://10.0.2.2:{port}/answers",
+        )
+        # Installer typed `reboot`; -no-reboot makes QEMU exit on guest reboot.
+        _ = await proc.wait()
+        proc = None  # don't reap below — already exited
+        (vm_dir / "qemu.pid").unlink(missing_ok=True)
+        # Relaunch with runtime args (no CD, no -no-reboot) and wait for SSH.
+        proc = await _launch_qemu(
+            artifacts.qemu_runtime_args,
+            pidfile=vm_dir / "qemu.pid",
+            stderr_log=vm_dir / "install.log",
+        )
+        assert cfg.ssh_port is not None
+        await _wait_ssh_ready("127.0.0.1", cfg.ssh_port)
+    except BaseException:
+        if proc is not None:
+            await _kill_proc(proc)
+        (vm_dir / "qemu.pid").unlink(missing_ok=True)
+        cfg.state = "failed"
+        cfg.save(vm_dir / "config.json")
+        raise
+    finally:
+        if answers_thread is not None:
+            answers_thread.join(timeout=2.0)
     cfg.save(vm_dir / "config.json")
     print(f"{cfg.name} ready: ssh -p {cfg.ssh_port} {cfg.user}@127.0.0.1")
     return 0
