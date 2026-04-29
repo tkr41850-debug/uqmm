@@ -207,3 +207,121 @@ def test_stop_force_sends_quit(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) 
     assert rc == 0
     powerdown.assert_not_awaited()
     quit_.assert_awaited_once()
+
+
+# ---- delete ----------------------------------------------------------------
+
+
+def test_delete_stopped_vm(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    monkeypatch.setenv("XDG_DATA_HOME", str(tmp_path / "data"))
+    vm_dir = _make_vm(tmp_path)
+    with patch("uqmm.cli.probe", new=AsyncMock(return_value="stopped")):
+        rc = main(["delete", "vm1"])
+    assert rc == 0
+    assert not vm_dir.exists()
+
+
+def test_delete_running_vm_stops_then_removes(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    monkeypatch.setenv("XDG_DATA_HOME", str(tmp_path / "data"))
+    vm_dir = _make_vm(tmp_path)
+
+    fake_client = MagicMock()
+    fake_client.disconnect = AsyncMock()
+
+    probe_results = iter(["running", "stopped"])
+
+    async def fake_probe(_vm: Path) -> str:
+        return next(probe_results)
+
+    with (
+        patch("uqmm.cli.probe", new=AsyncMock(side_effect=fake_probe)),
+        patch("uqmm.cli.qmp.connect", new=AsyncMock(return_value=fake_client)),
+        patch("uqmm.cli.qmp.system_powerdown", new=AsyncMock()),
+    ):
+        rc = main(["delete", "vm1"])
+    assert rc == 0
+    assert not vm_dir.exists()
+
+
+def test_delete_missing_vm_errors(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    monkeypatch.setenv("XDG_DATA_HOME", str(tmp_path / "data"))
+    rc = main(["delete", "nope"])
+    assert rc != 0
+
+
+# ---- ssh -------------------------------------------------------------------
+
+
+def test_ssh_execs_ssh_with_correct_args(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    monkeypatch.setenv("XDG_DATA_HOME", str(tmp_path / "data"))
+    _make_vm(tmp_path, ssh_port=22500, user="alice")
+
+    captured: dict[str, list[str]] = {}
+
+    def fake_execvp(file: str, argv: list[str]) -> None:
+        captured["file"] = [file]
+        captured["argv"] = argv
+
+    with patch("uqmm.cli._os.execvp", side_effect=fake_execvp):
+        rc = main(["ssh", "vm1"])
+    assert rc == 0
+    assert captured["file"] == ["ssh"]
+    argv = captured["argv"]
+    assert argv[0] == "ssh"
+    assert "-p" in argv and argv[argv.index("-p") + 1] == "22500"
+    assert "alice@127.0.0.1" in argv
+    assert "StrictHostKeyChecking=accept-new" in " ".join(argv)
+
+
+def test_ssh_passthrough_args(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    monkeypatch.setenv("XDG_DATA_HOME", str(tmp_path / "data"))
+    _make_vm(tmp_path, ssh_port=22500)
+
+    captured: dict[str, list[str]] = {}
+
+    def fake_execvp(file: str, argv: list[str]) -> None:
+        captured["argv"] = argv
+
+    with patch("uqmm.cli._os.execvp", side_effect=fake_execvp):
+        rc = main(["ssh", "vm1", "uname", "-a"])
+    assert rc == 0
+    assert captured["argv"][-2:] == ["uname", "-a"]
+
+
+def test_ssh_missing_vm(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    monkeypatch.setenv("XDG_DATA_HOME", str(tmp_path / "data"))
+    rc = main(["ssh", "nope"])
+    assert rc != 0
+
+
+# ---- log -------------------------------------------------------------------
+
+
+def test_log_prints_install_log(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    capsysbinary: pytest.CaptureFixture[bytes],
+) -> None:
+    monkeypatch.setenv("XDG_DATA_HOME", str(tmp_path / "data"))
+    vm_dir = _make_vm(tmp_path)
+    (vm_dir / "install.log").write_bytes(b"first line\nsecond line\n")
+    rc = main(["log", "vm1"])
+    out = capsysbinary.readouterr().out
+    assert rc == 0
+    assert b"first line" in out
+    assert b"second line" in out
+
+
+def test_log_no_log_yet(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    monkeypatch.setenv("XDG_DATA_HOME", str(tmp_path / "data"))
+    _make_vm(tmp_path)
+    rc = main(["log", "vm1"])
+    assert rc == 0
+
+
+def test_log_missing_vm(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    monkeypatch.setenv("XDG_DATA_HOME", str(tmp_path / "data"))
+    rc = main(["log", "nope"])
+    assert rc != 0

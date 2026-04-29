@@ -32,7 +32,7 @@ class AnswersServer:
 
     # Backwards-compat with the original (port, thread) tuple unpacking so
     # existing call sites keep working.
-    def __iter__(self) -> "Iterator[Any]":
+    def __iter__(self) -> Iterator[Any]:
         yield self.port
         yield self.thread
 

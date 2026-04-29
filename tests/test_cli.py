@@ -32,26 +32,6 @@ def test_status_zero_vms(
     assert "no" in out.lower() or "vms" in out.lower() or out.strip() == ""
 
 
-@pytest.mark.parametrize(
-    "cmd",
-    [
-        ["delete", "vm1"],
-        ["ssh", "vm1"],
-        ["log", "vm1"],
-    ],
-)
-def test_stub_commands_exit_with_not_implemented(
-    cmd: list[str],
-    monkeypatch: pytest.MonkeyPatch,
-    tmp_path: object,
-) -> None:
-    monkeypatch.setenv("XDG_DATA_HOME", str(tmp_path))
-    monkeypatch.setenv("XDG_CACHE_HOME", str(tmp_path))
-    # Stubs intentionally raise so a stale stub call is loud rather than silent.
-    with pytest.raises(NotImplementedError):
-        main(cmd)
-
-
 def test_list_zero_vms(
     capsys: pytest.CaptureFixture[str],
     monkeypatch: pytest.MonkeyPatch,

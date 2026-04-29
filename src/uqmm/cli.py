@@ -20,7 +20,6 @@ from pathlib import Path
 from typing import Annotated
 
 from cyclopts import App, Parameter
-
 from rich.console import Console
 from rich.table import Table
 
@@ -345,10 +344,20 @@ async def _stop_via_pidfile(vm_dir: Path) -> int:
 
 
 @app.command
-def delete(name: str) -> None:
+def delete(name: str) -> int:
     """Stop if running, then remove the VM directory."""
-    del name
-    raise NotImplementedError("delete: phase 4")
+    vm_dir = state.vm_dir(name)
+    if not vm_dir.exists():
+        print(f"no such VM: {name}", file=sys.stderr)
+        return 1
+    # Stop is idempotent — safe to call even if the VM is already stopped.
+    rc = asyncio.run(_stop(vm_dir, force=False))
+    if rc != 0:
+        print(f"could not stop {name}; refusing to delete", file=sys.stderr)
+        return rc
+    shutil.rmtree(vm_dir)
+    print(f"{name} deleted")
+    return 0
 
 
 @app.command
@@ -358,7 +367,7 @@ def status(name: str | None = None) -> int:
         vm_dir = state.vm_dir(name)
         result = asyncio.run(probe(vm_dir))
         print(result)
-        return 0 if result in ("running", "stopped", "starting") else 0
+        return 0
     vms = list(state.iter_vm_dirs())
     if not vms:
         print("no VMs")
@@ -395,21 +404,71 @@ def list_cmd() -> int:
 
 
 @app.command
-def ssh(name: str, *args: str) -> None:
+def ssh(
+    name: str,
+    *args: Annotated[str, Parameter(allow_leading_hyphen=True)],
+) -> int:
     """Resolve port + exec system ssh with passthrough args."""
-    # Phase 4: confirm cyclopts handles `uqmm ssh vm1 -- -L 8080:...`
-    # correctly. *args collects positionals; a leading `--` should make
-    # cyclopts stop flag-parsing, but verify against the real openssh flag
-    # surface and switch to a passthrough-specific cyclopts config if not.
-    del name, args
-    raise NotImplementedError("ssh: phase 4")
+    vm_dir = state.vm_dir(name)
+    if not (vm_dir / "config.json").exists():
+        print(f"no such VM: {name}", file=sys.stderr)
+        return 1
+    cfg = VMConfig.load(vm_dir / "config.json")
+    if cfg.ssh_port is None:
+        print(f"{name} has no SSH port allocated", file=sys.stderr)
+        return 1
+    argv = [
+        "ssh",
+        "-p",
+        str(cfg.ssh_port),
+        "-o",
+        "StrictHostKeyChecking=accept-new",
+        f"{cfg.user}@127.0.0.1",
+        *args,
+    ]
+    # os.execvp replaces this process with ssh — the caller's TTY is
+    # connected directly, signals/resize/Ctrl-C all behave like running ssh
+    # by hand. Returns 1 only if exec itself fails (e.g. ssh binary missing).
+    try:
+        _os.execvp("ssh", argv)
+    except FileNotFoundError:
+        print("ssh binary not found in PATH", file=sys.stderr)
+        return 1
+    return 0  # unreachable on success — execvp doesn't return
 
 
 @app.command
-def log(name: str, *, follow: bool = False) -> None:
+def log(name: str, *, follow: bool = False) -> int:
     """Print captured serial log; --follow tails."""
-    del name, follow
-    raise NotImplementedError("log: phase 4")
+    vm_dir = state.vm_dir(name)
+    if not (vm_dir / "config.json").exists():
+        print(f"no such VM: {name}", file=sys.stderr)
+        return 1
+    log_path = vm_dir / "install.log"
+    if not log_path.exists():
+        # Empty/no-log: not an error, just nothing to show.
+        return 0
+    with log_path.open("rb") as fh:
+        if follow:
+            return _follow_log(fh)
+        sys.stdout.buffer.write(fh.read())
+        return 0
+
+
+def _follow_log(fh: object) -> int:
+    """tail -f style: print appended bytes; exit on Ctrl-C."""
+    import time
+
+    try:
+        while True:
+            chunk = fh.read()  # pyright: ignore[reportAttributeAccessIssue]
+            if chunk:
+                _ = sys.stdout.buffer.write(chunk)
+                sys.stdout.buffer.flush()
+            else:
+                time.sleep(0.5)
+    except KeyboardInterrupt:
+        return 0
 
 
 def main(argv: list[str] | None = None) -> int:
