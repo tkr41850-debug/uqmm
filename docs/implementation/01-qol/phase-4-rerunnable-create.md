@@ -10,6 +10,12 @@ Issues: **[R14](../../issues/retry.md), [R5](../../issues/retry.md), [R1](../../
 
 Anchors: [../../design/cli.md § Errors during create](../../design/cli.md#errors-during-create), [../../design/config.md](../../design/config.md).
 
+## Pre-commit gate (every step in this phase)
+
+Before each `Commit:` below, run [the pre-commit gate from the README](README.md#pre-commit-gate): format → lint → type-check → tests → subagent diff review. The subagent prompt should reference both the issue ID being addressed and the design doc that names the affected area. Never `--no-verify`.
+
+This phase touches the `create` state machine and a new lockfile. The subagent review on each commit should explicitly check: "does this change preserve a correct state on every exit path — success, handled exception, KeyboardInterrupt, SIGKILL? Is the lockfile released or owned correctly across each path?"
+
 ## Design overview
 
 Today the state machine is `created` ↔ `failed`. Add `creating` as a third value. `create` writes `state="creating"` plus the resolved config to disk **before** any expensive work, then transitions to `created` on success, `failed` on a handled exception. A SIGKILL leaves the file in `creating`; recovery treats `creating` and `failed` the same way for resume purposes.
@@ -129,13 +135,19 @@ Same commit as the implementation, so design and code don't drift.
 
 **Commit:** (folded into step 4) `docs(cli): document state-aware create retry`
 
-## Step 6 — Phase close-out
+## Step 6 — Phase close-out gate
 
-- `uv run pytest` — full suite green; the headline test from step 4 (the user bug) is the regression marker.
-- `uv run basedpyright`, `uv run ruff check`, `uv run ruff format --check` clean.
-- Flip R14, R5, R1 in [../../issues/README.md § Adoption status](../../issues/README.md#adoption-status) from `planned` → `fixed`.
-- Subagent review: walk every state transition in the new state machine; confirm every path either advances state or releases the lock cleanly. Pay attention to the `KeyboardInterrupt` path — phase 1's atomic save should mean an interrupt mid-save doesn't tear the file, but verify.
+Run all of the following in order; do not skip any. See [README § Per-phase gate](README.md#per-phase-gate-close-out) for the pattern. Phase 4 is the largest behavioral change in 01-qol; do not shortcut the gate.
 
-Bump the catalog: R6 ("two simultaneous creates race past existence check") is now folded into the lockfile path — flip it to `fixed` too if the test in step 2 covers the race. Same for C1 / C2 if the lock makes `delete` and `stop` correctly observe in-progress creates (they should — the lock file is detectable even though `flock` state isn't, and a `stop`/`delete` during creating can refuse on lock-presence).
+1. **Full test suite** — `uv run pytest` (not `-q`). The headline regression test from step 4 (the user bug: failed-then-fixed-version retry) is the marker that this phase is done.
+2. **Type-check** — `uv run basedpyright` clean.
+3. **Format + lint** — `uv run ruff check && uv run ruff format --check` clean.
+4. **Phase-level subagent review** — diff the whole phase (`git diff <phase-start-commit>..HEAD`); ask: "walk every state transition in the new state machine. For each entry path (fresh, creating-locked, creating-stale, created-match, created-mismatch, failed-resume), does the code advance state correctly AND release the lock cleanly on every exit path including `KeyboardInterrupt`, handled exception, and successful return? Is the args-diff comparison field-set complete? Is the seed-vs-disk affecting field split correct?" Address findings.
+5. **Headline integration check** — manually drive the user bug scenario end-to-end via the CLI (with mocked QEMU + SSH if E2E gate isn't enabled): `uqmm create foo --version invalid` → fail → `uqmm create foo --version 3.21` → success. This is the user-facing acceptance for the phase.
+6. **Catalog flip** — update [../../issues/README.md § Adoption status](../../issues/README.md#adoption-status): R14, R5, R1 → `fixed`. Re-evaluate the following and update their status with a note:
+   - **R6** (two simultaneous creates race) — flip to `fixed` if step 2's lockfile test covers the race.
+   - **C1** (`stop` can't see in-progress create) and **C2** (`delete` removes vm_dir during create) — flip to `fixed` if the lockfile makes `stop`/`delete` correctly refuse during `creating`. If only partially addressed, add a sub-issue.
+   - **R15** (regenerate seed) — partially addressed for the `failed`/`creating` resume case; remains deferred for the `created` case (would need P12).
+7. **Spec sync** — confirm `docs/design/cli.md § Errors during create` reflects the new state machine (already required by step 5 of the implementation; this is the audit). Fix in a sibling `docs:` commit if drift remains.
 
-Re-evaluate R15 (regenerate seed for hostname/key changes): partially addressed — for the failed/creating resume case, R15 is fixed. For the `created` case it's still deferred (would require an `update` command — P12).
+No close-out commit unless step 4, step 6 (catalog narrative), or step 7 surfaces a `docs:` change. The catalog flip itself is a `docs:` commit.

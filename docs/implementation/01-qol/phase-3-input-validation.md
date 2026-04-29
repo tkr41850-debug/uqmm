@@ -8,6 +8,10 @@ Issues: **[I1](../../issues/config.md), [I9](../../issues/config.md), [I10](../.
 
 Anchors: [../../design/cli.md](../../design/cli.md), [../../design/config.md](../../design/config.md).
 
+## Pre-commit gate (every step in this phase)
+
+Before each `Commit:` below, run [the pre-commit gate from the README](README.md#pre-commit-gate): format → lint → type-check → tests → subagent diff review. The subagent prompt should reference both the issue ID being addressed and the design doc that names the affected area. Never `--no-verify`.
+
 ## Step 1 — "Did you mean" hint for unknown versions (I1)
 
 `src/uqmm/resolve.py:49-56` — `canonical_url()` raises `ValueError("no canonical image URL for ...")` and that bubbles unchanged through `create()`.
@@ -90,9 +94,15 @@ The hostname default falls out for free — if the name is hostname-safe, so is 
 
 **Commit:** `feat(state,cli): validate VM names against safe-name rules (I15)`
 
-## Step 6 — Phase close-out
+## Step 6 — Phase close-out gate
 
-- `uv run pytest` — full suite green.
-- `uv run basedpyright`, `uv run ruff check`, `uv run ruff format --check` clean.
-- Flip I1/I9/I10/I12/I15 in [../../issues/README.md § Adoption status](../../issues/README.md#adoption-status) from `planned` → `fixed`.
-- Subagent review: are any other CLI inputs still reaching builders without validation? Note them; defer unless they're trivial.
+Run all of the following in order; do not skip any. See [README § Per-phase gate](README.md#per-phase-gate-close-out) for the pattern.
+
+1. **Full test suite** — `uv run pytest` (not `-q`).
+2. **Type-check** — `uv run basedpyright` clean.
+3. **Format + lint** — `uv run ruff check && uv run ruff format --check` clean.
+4. **Phase-level subagent review** — diff the whole phase (`git diff <phase-start-commit>..HEAD`); ask: "are any other CLI inputs still reaching builders without validation? Are validators consistently raising at the CLI boundary (exit 2, friendly stderr) rather than mid-builder? Does the I15 name regex match the constraints assumed by `state.iter_vm_dirs` and the default-hostname path?" List any newly-found gaps; defer unless trivial, and add deferred items to [../../issues/](../../issues/).
+5. **Catalog flip** — update [../../issues/README.md § Adoption status](../../issues/README.md#adoption-status): I1, I9, I10, I12, I15 → `fixed`. Add any new issues uncovered in step 4.
+6. **Spec sync** — confirm any new validation rules (e.g. VM name regex, vcpus range) are reflected in [../../design/config.md](../../design/config.md). Fix in a sibling `docs:` commit if drift exists.
+
+No close-out commit unless step 4 surfaces a fix or step 6 produces a `docs:` change.

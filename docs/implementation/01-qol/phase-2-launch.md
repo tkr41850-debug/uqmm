@@ -8,6 +8,10 @@ Issues: **[C5](../../issues/concurrency.md), [C6](../../issues/concurrency.md), 
 
 Anchors: [../../design/cli.md](../../design/cli.md), [../../design/config.md](../../design/config.md).
 
+## Pre-commit gate (every step in this phase)
+
+Before each `Commit:` below, run [the pre-commit gate from the README](README.md#pre-commit-gate): format → lint → type-check → tests → subagent diff review. The subagent prompt should reference both the issue ID being addressed and the design doc that names the affected area. Never `--no-verify`.
+
 ## Step 1 — Drop `-no-reboot` from runtime args (P3)
 
 `src/uqmm/builders/cloudimg.py:165-195` — `_qemu_args()` is shared between install and runtime. `-no-reboot` is the right behavior during install (a guest reboot during cloud-init is almost always a config error and we want fast-fail) but wrong at runtime (a `sudo reboot` should reboot the VM, not stop it).
@@ -94,9 +98,15 @@ Print a stderr notice from the builder when either bump kicks in: `note: alpine 
 
 **Commit:** `feat(builders/alpine): notice when install bumps resources (I8)`
 
-## Step 7 — Phase close-out
+## Step 7 — Phase close-out gate
 
-- `uv run pytest` — full suite green.
-- `uv run basedpyright`, `uv run ruff check`, `uv run ruff format --check` clean.
-- Flip C5/C6/R3/I8/P1/P3 in [../../issues/README.md § Adoption status](../../issues/README.md#adoption-status) from `planned` → `fixed`.
-- Subagent diff review across the phase: focus on whether the C6 `_wait_ssh_or_exit` is plumbed through every caller.
+Run all of the following in order; do not skip any. See [README § Per-phase gate](README.md#per-phase-gate-close-out) for the pattern.
+
+1. **Full test suite** — `uv run pytest` (not `-q`).
+2. **Type-check** — `uv run basedpyright` clean.
+3. **Format + lint** — `uv run ruff check && uv run ruff format --check` clean.
+4. **Phase-level subagent review** — diff the whole phase (`git diff <phase-start-commit>..HEAD`); ask: "is `_wait_ssh_or_exit` from step 4 (C6) plumbed through every caller of `_wait_ssh_ready` — the two `_create_*` paths, `_start --wait`, and any new health check from C5? Does the runtime/install args split (P3) leak any install-time behavior into runtime, or vice versa? Are R3's overlay-cleanup paths exception-safe for both Alpine and cloud-image builders?" Address findings.
+5. **Catalog flip** — update [../../issues/README.md § Adoption status](../../issues/README.md#adoption-status): C5, C6, R3, I8, P1, P3 → `fixed`.
+6. **Spec sync** — re-read [../../design/cli.md](../../design/cli.md) and [../../design/config.md](../../design/config.md). If `_qemu_args` split (P3) or the new SSH-wait error surface (C6) drifted from what the design says, fix in a sibling `docs:` commit.
+
+No close-out commit unless step 4 or step 6 surfaces a fix.

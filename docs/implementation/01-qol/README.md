@@ -31,9 +31,28 @@ Conventional-commits prefixes from baseline: `fix:`, `feat:`, `feat(scope):`, `t
 
 ## Pre-commit gate
 
-Same as [../baseline/README.md § Pre-commit gate](../baseline/README.md#pre-commit-gate): format, lint, type-check, test, subagent diff review. Never `--no-verify`.
+Run **all five** before every commit. Never `--no-verify`. A failing gate means the commit didn't happen — fix forward and re-stage; do not amend after the fact.
 
-End of each phase: full `uv run pytest` + flip the affected issues from `planned` → `fixed` in [../../issues/README.md § Adoption status](../../issues/README.md#adoption-status).
+1. **Format** — `uv run ruff format`
+2. **Lint** — `uv run ruff check --fix`
+3. **Type check** — `uv run basedpyright` (zero errors in strict mode)
+4. **Tests** — `uv run pytest -q` (the affected path is enough mid-phase; full suite at end of phase)
+5. **Subagent review** — spawn an `Explore` or `general-purpose` subagent with the staged diff and the relevant design + issue docs. Ask for: bugs, missed edge cases, deviations from design, dead code, missing tests for the issue ID being addressed. Cap response at ~300 words. Address findings or note explicitly why deferred.
+
+The phase docs reference this checklist by name as **the pre-commit gate**; every "Commit:" line in a phase doc is an implicit "run the gate, then commit".
+
+## Per-phase gate (close-out)
+
+End of each phase, before declaring it done:
+
+1. **Full test suite** — `uv run pytest` (not just `-q`; let it run uncut).
+2. **Type-check** — `uv run basedpyright` clean.
+3. **Format + lint** — `uv run ruff check && uv run ruff format --check` clean.
+4. **Subagent phase-level review** — diff the whole phase (`git diff <phase-start-commit>..HEAD`); ask the subagent the question called out in that phase's close-out step. Different phases ask different questions (e.g. phase 2 asks "is C6's `_wait_ssh_or_exit` plumbed through every caller?"). Address findings.
+5. **Catalog flip** — update [../../issues/README.md § Adoption status](../../issues/README.md#adoption-status): every issue listed in the phase moves `planned` → `fixed`. If something was deferred mid-phase, mark it explicitly.
+6. **Spec sync** — re-read the design docs the phase touches; if any code-design drift was introduced and not yet reflected in the design, fix the design in a sibling `docs:` commit.
+
+Only the catalog flip and any drift-fix commit are part of close-out commits. Steps 1–4 are gates, not commits.
 
 ## Out of scope
 

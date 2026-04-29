@@ -8,6 +8,10 @@ Issues: **[C8](../../issues/concurrency.md), [C9](../../issues/concurrency.md), 
 
 Anchors: [../../design/cli.md § Status discovery](../../design/cli.md#status-discovery), [../../design/cli.md § Port allocation](../../design/cli.md#port-allocation).
 
+## Pre-commit gate (every step in this phase)
+
+Before each `Commit:` below, run [the pre-commit gate from the README](README.md#pre-commit-gate): format → lint → type-check → tests → subagent diff review. The subagent prompt should reference both the issue ID being addressed and the design doc that names the affected area. Never `--no-verify`.
+
 ## Step 1 — Atomic config writes (C8)
 
 `src/uqmm/config.py` — `VMConfig.save()` currently uses `Path.write_text()`, which truncates+writes in two syscalls. A reader hitting it mid-write sees an empty or partial file.
@@ -69,11 +73,15 @@ Add a new probe state `invalid-config` in `discover.py`'s `Status` literal; docu
 
 **Commit:** `fix(cli,discover): tolerate corrupt config.json in list/status (P10)`
 
-## Step 5 — Phase close-out
+## Step 5 — Phase close-out gate
 
-- `uv run pytest` — full suite green.
-- `uv run basedpyright`, `uv run ruff check`, `uv run ruff format --check` clean.
-- Flip C8/C9/C10/P10 in [../../issues/README.md § Adoption status](../../issues/README.md#adoption-status) from `planned` → `fixed`.
-- Subagent review of the phase as a whole — check that the new `invalid-config` state is wired into every command that calls `probe()`.
+Run all of the following in order; do not skip any. See [README § Per-phase gate](README.md#per-phase-gate-close-out) for the pattern; the phase-specific subagent question is in step 4 below.
 
-No close-out commit unless the review surfaces a fix.
+1. **Full test suite** — `uv run pytest` (not `-q`).
+2. **Type-check** — `uv run basedpyright` clean.
+3. **Format + lint** — `uv run ruff check && uv run ruff format --check` clean.
+4. **Phase-level subagent review** — diff the whole phase (`git diff <phase-start-commit>..HEAD`); ask: "is the new `invalid-config` state wired into every command that calls `probe()`? Are atomic-write semantics applied consistently for both `config.json` and `qemu.pid`? Does the C10 fail-closed path produce a clean error at the CLI boundary?" Address findings.
+5. **Catalog flip** — update [../../issues/README.md § Adoption status](../../issues/README.md#adoption-status): C8, C9, C10, P10 → `fixed`.
+6. **Spec sync** — confirm `docs/design/cli.md § Status discovery` reflects the new `invalid-config` state added in step 4. If not, fix in a sibling `docs:` commit.
+
+No close-out commit unless step 4 or step 6 surfaces a fix.

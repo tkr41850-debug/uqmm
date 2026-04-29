@@ -10,6 +10,12 @@ Issues: **[R10](../../issues/retry.md), [R11](../../issues/retry.md), [R12](../.
 
 Anchors: [../../design/config.md § AlpineSeedBuilder](../../design/config.md), `src/uqmm/builders/alpine.py`, `src/uqmm/cli.py:131-181`.
 
+## Pre-commit gate (every step in this phase)
+
+Before each `Commit:` below, run [the pre-commit gate from the README](README.md#pre-commit-gate): format → lint → type-check → tests → subagent diff review. The subagent prompt should reference both the issue ID being addressed and the design doc that names the affected area. Never `--no-verify`.
+
+This phase introduces marker files that gate skip-ahead behavior. The subagent review on each commit should explicitly check: "is the marker invariant preserved on every path — created ⇒ no markers, failed-with-installed ⇒ disk works without setup-alpine? Are the markers crash-safe (touch-and-fsync, idempotent)?"
+
 ## Design overview
 
 The Alpine create flow has three observable checkpoints:
@@ -124,14 +130,28 @@ Add a note about the seed-after-install limitation: once setup-alpine has run, k
 
 **Commit:** (folded into step 3 or its own `docs:` commit) `docs: alpine install checkpoint markers`
 
-## Step 6 — Phase close-out
+## Step 6 — Phase close-out gate
 
-- `uv run pytest` — full suite green.
-- `uv run basedpyright`, `uv run ruff check`, `uv run ruff format --check` clean.
-- Flip R10, R11, R12 in [../../issues/README.md § Adoption status](../../issues/README.md#adoption-status) from `planned` → `fixed`.
-- Re-evaluate the broader retry catalog now that phases 4 + 5 are both in:
-  - R13 (cloud-image guest reboot during first boot) — partially addressed by C6 fast-fail; full fix would need replaying the boot, deferred.
-  - R15 (regenerate seed for hostname/key) — addressed for `failed` state; for `created` state it remains deferred (= P12 update command).
-- Subagent review: focus on the install/runtime split — confirm `serve_answers_once` is only called in the install path, not the runtime path. Confirm the markers' invariant (created ⇒ no markers; failed-with-installed ⇒ disk works without setup-alpine).
+Run all of the following in order; do not skip any. See [README § Per-phase gate](README.md#per-phase-gate-close-out) for the pattern.
 
-End-of-pass: write a short note in `docs/implementation/01-qol/RESULTS.md` (one paragraph per phase, what shipped, what didn't, and any new issues uncovered during implementation). Update the issues catalog with anything new.
+1. **Full test suite** — `uv run pytest` (not `-q`).
+2. **Type-check** — `uv run basedpyright` clean.
+3. **Format + lint** — `uv run ruff check && uv run ruff format --check` clean.
+4. **Phase-level subagent review** — diff the whole phase (`git diff <phase-start-commit>..HEAD`); ask: "is `serve_answers_once` only called in the install path, not in the runtime-resume path? Is the marker invariant preserved on every transition — created ⇒ no markers, failed-with-installed ⇒ disk works without setup-alpine? Does the resume routing matrix from the Design overview match the implementation's actual branches?" Address findings.
+5. **Headline integration check** — manually drive the R10–R12 scenarios end-to-end (mocked QEMU + SSH unless E2E is enabled): (a) Alpine install fails before `/answers` fetch → retry succeeds without re-downloading ISO; (b) Alpine install completes, runtime SSH-wait fails → retry skips install entirely.
+6. **Catalog flip** — update [../../issues/README.md § Adoption status](../../issues/README.md#adoption-status): R10, R11, R12 → `fixed`. Re-evaluate and update with notes:
+   - **R13** (cloud-image guest reboot during first boot) — partially addressed by C6 fast-fail from phase 2; full fix would need replaying the boot. Remains deferred.
+   - **R15** (regenerate seed) — addressed for `failed` state via phases 4+5; for the `created` case it remains deferred (= P12 update command).
+7. **Spec sync** — confirm [../../design/config.md § AlpineSeedBuilder](../../design/config.md) and the create state machine section in `docs/design/cli.md` (added in phase 4) reflect the marker-file lifecycle and the routing table. Fix in a sibling `docs:` commit if drift exists.
+
+No close-out commit unless step 4, step 6 (catalog narrative), or step 7 surfaces a `docs:` change.
+
+## End-of-pass wrap-up
+
+After phase 5's gate is fully green:
+
+1. Write `docs/implementation/01-qol/RESULTS.md` — one paragraph per phase: what shipped, what didn't, and any new issues uncovered during implementation.
+2. Add any newly-discovered issues to the appropriate topic doc under [../../issues/](../../issues/), and add their adoption status.
+3. Final repo-wide subagent review: "did 01-qol introduce any new code-design drift, dead code, or untested public surface across the five phases? Are the deferred-but-noted issues (R6, C1, C2, R13, R15) all explicitly tracked in the catalog?"
+
+`docs:` commit for the RESULTS write-up + catalog updates.
