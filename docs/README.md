@@ -6,6 +6,7 @@
 
 - **[research/](research/)** — what we learned about Alpine install, cloud images, QEMU control, TCG/SLiRP constraints, rootless tooling. Reference material; doesn't churn.
 - **[design/](design/)** — what we're building: config schema, CLI surface, state layout. Evolves with the codebase.
+- **[implementation/baseline/](implementation/baseline/)** — phased plan for getting from green-field to a working `uqmm create` for both install paths.
 
 ## Two paths, three OS targets
 
