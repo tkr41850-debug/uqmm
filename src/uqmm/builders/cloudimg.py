@@ -5,6 +5,7 @@ See docs/design/config.md § CloudImageBuilder and docs/research/cloud-image.md.
 
 from __future__ import annotations
 
+import subprocess
 from pathlib import Path
 from typing import Any
 
@@ -84,3 +85,34 @@ def _bytes_io(data: bytes) -> Any:
     import io
 
     return io.BytesIO(data)
+
+
+def prepare_disk(base: Path, out: Path, size_gb: int) -> None:
+    """Create a qcow2 backed by `base`, then resize to `size_gb`.
+
+    qcow2 backing-file references mean we don't copy the multi-hundred-MB
+    cloud image — `out` is a thin overlay sized to `size_gb`. Cloud images
+    auto-grow their root partition via cloud-initramfs-growroot on first
+    boot, but only up to the qcow2 size, so the resize must happen *before*
+    the first boot.
+    """
+    if not base.exists():
+        raise FileNotFoundError(f"base image not found: {base}")
+    create_cmd = [
+        "qemu-img",
+        "create",
+        "-f",
+        "qcow2",
+        "-F",
+        "qcow2",
+        "-b",
+        str(base),
+        str(out),
+    ]
+    resize_cmd = ["qemu-img", "resize", str(out), f"{size_gb}G"]
+    for cmd in (create_cmd, resize_cmd):
+        try:
+            subprocess.run(cmd, check=True, capture_output=True)
+        except subprocess.CalledProcessError as e:
+            stderr = e.stderr.decode("utf-8", errors="replace") if e.stderr else ""
+            raise RuntimeError(f"{cmd[0]} {cmd[1]} failed: {stderr.strip()}") from e
