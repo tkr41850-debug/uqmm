@@ -69,6 +69,16 @@ def test_drive_install_happy_path() -> None:
     assert sent[6] == "reboot"
 
 
+def test_drive_install_raises_panic_when_kernel_panic_on_console() -> None:
+    from uqmm.alpine_drive import PanicDetected
+
+    spawn = MagicMock()
+    # The first expect picks index 1 = "Kernel panic" alternative.
+    spawn.expect = MagicMock(return_value=1)
+    with pytest.raises(PanicDetected, match="Kernel panic"):
+        drive_install(spawn, answers_url="http://10.0.2.2:9999/answers")
+
+
 def test_drive_install_raises_on_unexpected_timeout() -> None:
     from pexpect import TIMEOUT
 

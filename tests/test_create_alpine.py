@@ -34,7 +34,7 @@ def _patches(art: InstallArtifacts):
         patch("uqmm.cli.drive_install", new=MagicMock()),
         patch(
             "uqmm.cli.serve_answers_once",
-            return_value=(9999, MagicMock(join=MagicMock())),
+            return_value=MagicMock(port=9999, stop=MagicMock()),
         ),
         patch("uqmm.cli._wait_ssh_ready", new=AsyncMock(return_value=None)),
     )
@@ -116,7 +116,7 @@ def test_create_alpine_marks_failed_on_drive_timeout(
         patch("uqmm.cli.drive_install", new=MagicMock(side_effect=TIMEOUT("login prompt"))),
         patch(
             "uqmm.cli.serve_answers_once",
-            return_value=(9999, MagicMock(join=MagicMock())),
+            return_value=MagicMock(port=9999, stop=MagicMock()),
         ),
         patch("uqmm.cli._wait_ssh_ready", new=AsyncMock(return_value=None)),
         pytest.raises(TIMEOUT),

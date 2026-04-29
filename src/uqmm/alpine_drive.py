@@ -27,6 +27,22 @@ class _Spawn(Protocol):
 # Disposable: setup-alpine demands a value, but key-based SSH is the real auth path.
 _DEFAULT_ROOT_PASSWORD = "uqmm-disposable"
 
+# Strings that mean "the install crashed; don't keep waiting for the prompt."
+# Per docs/research/alpine-unattended.md, alternate every expect with these so a
+# panic fails loudly instead of hanging until the per-step timeout.
+_PANIC_PATTERNS = ["Kernel panic", "Call Trace:", "Oops:", "Aieee"]
+
+
+def _expect_or_panic(spawn: _Spawn, pattern: str, timeout: float) -> None:
+    """Expect `pattern`; raise PanicDetected if a kernel panic shows up first."""
+    idx = spawn.expect([pattern, *_PANIC_PATTERNS], timeout=timeout)
+    if idx > 0:
+        raise PanicDetected(_PANIC_PATTERNS[idx - 1])
+
+
+class PanicDetected(RuntimeError):
+    """Kernel panic / oops observed on the install console."""
+
 
 def drive_install(
     spawn: _Spawn,
@@ -49,17 +65,17 @@ def drive_install(
     pw = root_password or _DEFAULT_ROOT_PASSWORD
 
     # 1. live-ISO login (root, no password)
-    spawn.expect("login: ", timeout=180)
+    _expect_or_panic(spawn, "login: ", timeout=180)
     spawn.sendline("root")
-    spawn.expect("# ", timeout=15)
+    _expect_or_panic(spawn, "# ", timeout=15)
 
     # 2. widen the terminal so our regex anchors don't trip on line wraps
     spawn.sendline("stty cols 200")
-    spawn.expect("# ", timeout=10)
+    _expect_or_panic(spawn, "# ", timeout=10)
 
     # 3. DHCP — alpine-virt brings eth0 down by default
     spawn.sendline("ifconfig eth0 up && udhcpc -i eth0")
-    spawn.expect("# ", timeout=30)
+    _expect_or_panic(spawn, "# ", timeout=30)
 
     # 4. fetch answers + run installer (ERASE_DISKS suppresses the disk-erase prompt)
     spawn.sendline(
@@ -68,11 +84,11 @@ def drive_install(
         "setup-alpine -ef /tmp/answers"
     )
     # 5. setup-alpine asks for new root password twice, even with -f.
-    spawn.expect("New password: ", timeout=300)
+    _expect_or_panic(spawn, "New password: ", timeout=300)
     spawn.sendline(pw)
-    spawn.expect("Retype password: ", timeout=10)
+    _expect_or_panic(spawn, "Retype password: ", timeout=10)
     spawn.sendline(pw)
 
     # 6. wait for installer completion; the shell prompt returns when done.
-    spawn.expect("# ", timeout=900)
+    _expect_or_panic(spawn, "# ", timeout=900)
     spawn.sendline("reboot")

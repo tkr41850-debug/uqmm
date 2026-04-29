@@ -87,10 +87,13 @@ def test_alpine_bumps_resources_below_threshold(tmp_path: Path) -> None:
         artifacts = AlpineSeedBuilder().build(cfg, vm_dir)
 
     install = artifacts.qemu_install_args
-    smp_idx = install.index("-smp")
-    mem_idx = install.index("-m")
-    assert install[smp_idx + 1] == "4"
-    assert install[mem_idx + 1] == "4096"
+    runtime = artifacts.qemu_runtime_args
+    # Install bumps to ≥4 / ≥4096 to keep TCG install time tractable.
+    assert install[install.index("-smp") + 1] == "4"
+    assert install[install.index("-m") + 1] == "4096"
+    # Runtime honors the user's actual request — bump is install-only.
+    assert runtime[runtime.index("-smp") + 1] == "2"
+    assert runtime[runtime.index("-m") + 1] == "2048"
 
 
 def test_alpine_keeps_higher_resources(tmp_path: Path) -> None:

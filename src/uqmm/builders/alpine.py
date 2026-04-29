@@ -85,14 +85,8 @@ class AlpineSeedBuilder:
         )
 
 
-def _common_args(cfg: VMConfig, vm_dir: Path) -> list[str]:
+def _common_args(cfg: VMConfig, vm_dir: Path, *, smp: int, mem_mb: int) -> list[str]:
     assert cfg.ssh_port is not None
-    # Alpine install needs more than the default 2 vcpus / 2 GiB to finish
-    # apk-add openssh + reboot in a reasonable time under TCG; bump the
-    # minimum at *args generation* time so the user's stored config still
-    # reflects what they asked for.
-    smp = max(cfg.vcpus, 4)
-    mem = max(cfg.memory_mb, 4096)
     return [
         "qemu-system-x86_64",
         "-machine",
@@ -102,7 +96,7 @@ def _common_args(cfg: VMConfig, vm_dir: Path) -> list[str]:
         "-smp",
         str(smp),
         "-m",
-        str(mem),
+        str(mem_mb),
         "-nographic",
         "-netdev",
         f"user,id=net0,hostfwd=tcp:127.0.0.1:{cfg.ssh_port}-:22",
@@ -114,8 +108,14 @@ def _common_args(cfg: VMConfig, vm_dir: Path) -> list[str]:
 
 
 def _qemu_install_args(cfg: VMConfig, vm_dir: Path, disk: Path, iso: Path) -> list[str]:
+    # Alpine install needs more than the default 2 vcpus / 2 GiB to finish
+    # apk-add openssh + reboot in a reasonable time under TCG; bump the
+    # minimum *only at install time* — the stored cfg is unchanged, and the
+    # runtime relaunch uses the user's actual request.
+    install_smp = max(cfg.vcpus, 4)
+    install_mem = max(cfg.memory_mb, 4096)
     return [
-        *_common_args(cfg, vm_dir),
+        *_common_args(cfg, vm_dir, smp=install_smp, mem_mb=install_mem),
         "-cdrom",
         str(iso),
         "-boot",
@@ -133,7 +133,7 @@ def _qemu_install_args(cfg: VMConfig, vm_dir: Path, disk: Path, iso: Path) -> li
 
 def _qemu_runtime_args(cfg: VMConfig, vm_dir: Path, disk: Path) -> list[str]:
     return [
-        *_common_args(cfg, vm_dir),
+        *_common_args(cfg, vm_dir, smp=cfg.vcpus, mem_mb=cfg.memory_mb),
         "-drive",
         f"file={disk},if=virtio,format=qcow2",
         "-serial",

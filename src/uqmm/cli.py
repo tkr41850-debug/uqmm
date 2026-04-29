@@ -126,11 +126,11 @@ async def _create_cloudimg(cfg: VMConfig, vm_dir: Path) -> int:
 async def _create_alpine(cfg: VMConfig, vm_dir: Path) -> int:
     """Drive the alpine branch: ISO install over serial, then runtime relaunch."""
     proc: Process | None = None
-    answers_thread = None
+    answers = None
     try:
         artifacts = AlpineSeedBuilder().build(cfg, vm_dir)
         answers_text = (vm_dir / "answers").read_text()
-        port, answers_thread = serve_answers_once(answers_text)
+        answers = serve_answers_once(answers_text)
         proc = await _launch_qemu(
             artifacts.qemu_install_args,
             pidfile=vm_dir / "qemu.pid",
@@ -144,7 +144,7 @@ async def _create_alpine(cfg: VMConfig, vm_dir: Path) -> int:
             None,
             drive_install,
             spawn,
-            f"http://10.0.2.2:{port}/answers",
+            f"http://10.0.2.2:{answers.port}/answers",
         )
         # Installer typed `reboot`; -no-reboot makes QEMU exit on guest reboot.
         _ = await proc.wait()
@@ -166,8 +166,11 @@ async def _create_alpine(cfg: VMConfig, vm_dir: Path) -> int:
         cfg.save(vm_dir / "config.json")
         raise
     finally:
-        if answers_thread is not None:
-            answers_thread.join(timeout=2.0)
+        # Unconditionally stop the answers server — on the success path it
+        # already self-shut-down after the wget; on the failure path the guest
+        # may never have fetched, leaving serve_forever blocked otherwise.
+        if answers is not None:
+            answers.stop()
     cfg.save(vm_dir / "config.json")
     print(f"{cfg.name} ready: ssh -p {cfg.ssh_port} {cfg.user}@127.0.0.1")
     return 0
