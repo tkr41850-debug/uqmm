@@ -44,7 +44,11 @@ def iter_vm_dirs() -> Iterator[Path]:
 
 
 def read_occupied_ports() -> set[int]:
-    """Collect `ssh_port` from every existing VM's config.json."""
+    """Collect `ssh_port` from every existing VM's config.json.
+
+    Raises ValueError if any config.json is corrupt — a corrupt config
+    makes the port look free, which can cause silent double-assignment.
+    """
     ports: set[int] = set()
     for d in iter_vm_dirs():
         cfg_path = d / "config.json"
@@ -52,8 +56,8 @@ def read_occupied_ports() -> set[int]:
             continue
         try:
             cfg = VMConfig.load(cfg_path)
-        except (ValueError, OSError):
-            continue
+        except (ValueError, OSError) as e:
+            raise ValueError(f"corrupt config for VM {d.name!r}: {cfg_path}") from e
         if cfg.ssh_port is not None:
             ports.add(cfg.ssh_port)
     return ports

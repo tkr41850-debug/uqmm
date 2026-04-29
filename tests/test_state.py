@@ -106,7 +106,7 @@ def test_read_occupied_ports(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) ->
     assert state.read_occupied_ports() == {22050, 22070}
 
 
-def test_read_occupied_ports_skips_corrupt_config(
+def test_C10_read_occupied_ports_raises_on_corrupt_config(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
     monkeypatch.setenv("XDG_DATA_HOME", str(tmp_path))
@@ -117,8 +117,9 @@ def test_read_occupied_ports_skips_corrupt_config(
     bad.mkdir(parents=True)
     VMConfig(name="good", os="alpine", version="3.21", ssh_port=22055).save(good / "config.json")
     (bad / "config.json").write_text("{ this is not valid json")
-    # Corrupt config is silently skipped — port allocator stays useful.
-    assert state.read_occupied_ports() == {22055}
+    # Corrupt config must raise — not silently skip — to prevent port double-assignment.
+    with pytest.raises(ValueError, match="bad"):
+        state.read_occupied_ports()
 
 
 def test_pick_ssh_port_real_bind_smoke() -> None:
