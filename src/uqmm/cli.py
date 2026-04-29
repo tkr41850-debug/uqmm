@@ -77,9 +77,13 @@ def create(
         print(f"VM directory already exists: {vm_dir}", file=sys.stderr)
         return 1
 
-    resolved_port = (
-        ssh_port if ssh_port is not None else state.pick_ssh_port(state.read_occupied_ports())
-    )
+    try:
+        resolved_port = (
+            ssh_port if ssh_port is not None else state.pick_ssh_port(state.read_occupied_ports())
+        )
+    except ValueError as e:
+        print(str(e), file=sys.stderr)
+        return 1
 
     cfg = VMConfig(
         name=name,
@@ -392,7 +396,11 @@ def list_cmd() -> int:
         if not cfg_path.exists():
             table.add_row(d.name, "?", "?", "?")
             continue
-        cfg = VMConfig.load(cfg_path)
+        try:
+            cfg = VMConfig.load(cfg_path)
+        except (ValueError, OSError):
+            table.add_row(d.name, "?", "invalid-config", "?")
+            continue
         result = asyncio.run(probe(d))
         port = str(cfg.ssh_port) if cfg.ssh_port is not None else "-"
         table.add_row(d.name, f"{cfg.os}/{cfg.version}", result, port)
