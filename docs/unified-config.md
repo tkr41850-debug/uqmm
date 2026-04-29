@@ -15,15 +15,16 @@ Goal: a single `VMConfig` shape that drives unattended install on both Alpine an
 
 ## What fundamentally differs
 
-| Concern | Alpine | Ubuntu |
+| Concern | Alpine (ISO + pexpect) | Debian/Ubuntu (cloud image) |
 |---|---|---|
-| Storage layout DSL | `setup-disk` flags (`DISKOPTS="-m sys -s 0 /dev/vda"`) | Subiquity `storage:` graph or `layout: { name: direct\|lvm }` |
-| Package manager | `apk` | `apt` |
-| Repo selection | `APKREPOSOPTS` | `apt:` block in autoinstall |
-| Delivery vehicle | Stock ISO + serial pexpect (HTTP-served answers); apkovl tarball as fallback | CIDATA seed ISO + cmdline `autoinstall` |
-| Bootloader hook | `setup-disk` `BOOTLOADER` env var | Subiquity grub config |
-| Auto-reboot at end? | No — apkovl script must `reboot` | Yes |
-| Default ttyS0? | Yes (alpine-virt cmdline) | No (must add `console=ttyS0,115200n8`) |
+| Source artifact | `alpine-virt-X.Y.Z.iso` (~50 MB) | `*-genericcloud-amd64.qcow2` / `*-server-cloudimg-amd64.img` (~350-700 MB) |
+| Provisioning model | Run installer interactively over serial; install to blank disk | Boot pre-installed image; cloud-init applies seed on first boot |
+| Time to SSH-ready (TCG) | 2-4 min | 30-60 s |
+| Storage layout | `setup-disk -m sys -s 0 /dev/vda` (one partition, no swap) | Single partition, auto-grown by `cloud-initramfs-growroot` |
+| Package manager | `apk` | `apt` (Debian + Ubuntu) |
+| Default user | `root` (no password) on live ISO; uqmm-created user after install | `debian` / `ubuntu` (preconfigured); add custom user via cloud-config `users:` |
+| Default ttyS0? | Yes (alpine-virt cmdline) | Yes (cloud images preconfigured) |
+| Seed delivery | answer file via `wget http://10.0.2.2:8000/answers` typed at root prompt | CIDATA-labeled ISO attached as second virtio drive |
 
 The smart abstraction stops at the **high-level intent** and dispatches to per-OS builders for storage and delivery.
 
@@ -49,14 +50,13 @@ class User:
 
 @dataclass
 class VMConfig:
-    os: Literal["alpine", "ubuntu"]
-    os_version: str                       # "3.21", "24.04"
+    os: Literal["alpine", "debian", "ubuntu"]
+    os_version: str                       # "3.21", "13" (trixie), "24.04"
     hostname: str
     user: User                            # primary admin
     timezone: str = "UTC"
     root_ssh: SshAuth | None = None
     disk_size_gb: int = 20
-    disk_layout: Literal["simple", "lvm"] = "simple"
     packages: list[str] = field(default_factory=list)
     post_install: list[str] = field(default_factory=list)
 ```
@@ -86,13 +86,15 @@ class SeedBuilder(Protocol):
 
 No ISO rebuild. The custom-ISO/apkovl approach ([alpine-unattended.md](alpine-unattended.md)) remains available as a fallback for offline-only or stricter reproducibility scenarios.
 
-### `UbuntuSeedBuilder` produces
+### `CloudImageBuilder` produces (Debian + Ubuntu, unified)
 
-- `user-data` + `meta-data` (from `VMConfig` fields)
-- `seed.iso` via `xorriso -as mkisofs -V CIDATA ...`
-- Extracted `vmlinuz` + `initrd` from live-server ISO (cached per release)
-- `qemu_install_args`: `-kernel vmlinuz -initrd initrd -append "autoinstall ds=nocloud;s=/cidata/ console=ttyS0,115200n8" -cdrom ubuntu.iso -drive file=seed.iso,format=raw,if=virtio -drive file=disk.qcow2,if=virtio -no-reboot`
-- `qemu_runtime_args`: `-drive file=disk.qcow2,if=virtio`
+- Downloaded cloud image (`debian-13-genericcloud-amd64.qcow2` or `noble-server-cloudimg-amd64.img`), cached + resized to target disk size.
+- `user-data` (cloud-config: hostname, users, ssh keys, packages, runcmd) + `meta-data` (instance-id, local-hostname).
+- `seed.iso` via `xorriso -as mkisofs -V CIDATA ...`.
+- `qemu_install_args` is the same as `qemu_runtime_args` — there's no separate install boot. Just: `-drive file=cloudimg.qcow2,if=virtio -drive file=seed.iso,if=virtio,format=raw,readonly=on -no-reboot`.
+- The seed disk can be detached on subsequent boots if desired (cloud-init only reads it on first boot, but leaving it attached is harmless).
+
+The Ubuntu autoinstall ISO + Debian d-i preseed paths remain available as fallbacks (see [iso-install-fallback.md](iso-install-fallback.md)) for compliance / custom-partition / non-cloud-init scenarios.
 
 ## Lifecycle layer (fully shared)
 
@@ -116,17 +118,19 @@ uqmm/
   builders/
     __init__.py
     base.py              # SeedBuilder protocol, InstallArtifacts
-    alpine.py            # AlpineSeedBuilder
-    ubuntu.py            # UbuntuSeedBuilder
+    alpine.py            # AlpineSeedBuilder (ISO + pexpect)
+    cloudimg.py          # CloudImageBuilder (Debian + Ubuntu, NoCloud cidata)
   qemu/
     __init__.py
     qmp.py               # qemu.qmp wrapper, lifecycle commands
-    serial.py            # serial console reader
+    serial.py            # serial console reader (Alpine path)
     process.py           # subprocess launcher with -no-reboot handling
   ssh.py                 # paramiko/asyncssh client + readiness polling
   cli.py                 # argparse / click entry point
 ```
 
+Two builders, three OS targets. The cloud image builder collapses Debian and Ubuntu into one parameterized implementation (URL + default username differ).
+
 ## Bottom line
 
-The user-facing config object stays unified at intent level. Per-OS divergence is encapsulated in two small builder modules. Everything below the builder (lifecycle, QMP, SSH) is fully shared. Adding a third OS later (Debian, Fedora) is one new builder module.
+The user-facing config object stays unified at intent level. Per-technique divergence is encapsulated in two small builder modules: `AlpineSeedBuilder` (ISO+pexpect) and `CloudImageBuilder` (Debian + Ubuntu via NoCloud cidata). Everything below the builder (lifecycle, QMP, SSH) is fully shared. Adding Fedora or Arch later means one URL + one default-user added to the cloud image builder.

@@ -12,19 +12,21 @@ Reference docs for building **uqmm**: a Python CLI QEMU machine manager that pro
 ## Topics
 
 - [Alpine unattended install](alpine-unattended.md) — answer file format, stock-ISO + serial pexpect (recommended), apkovl/custom-ISO fallback.
-- [Ubuntu autoinstall](ubuntu-autoinstall.md) — cloud-init NoCloud, CIDATA seed ISO, autoinstall cmdline workaround.
+- [Cloud-image install (Debian + Ubuntu)](cloud-image.md) — pre-built qcow2 + NoCloud cidata seed. Recommended path for both Debian and Ubuntu.
+- [ISO install fallback (Debian + Ubuntu)](iso-install-fallback.md) — Subiquity autoinstall + d-i preseed for compliance / custom-partition / offline scenarios.
 - [QEMU control](qemu-control.md) — QMP socket, `qemu.qmp` Python client, lifecycle commands, serial console wiring.
 - [TCG + SLiRP](tcg-slirp.md) — TCG tuning, CPU feature support under emulation, SLiRP networking gotchas.
 - [Rootless tooling](rootless-tooling.md) — image creation/inspection, ISO building, all without root.
-- [Unified config model](unified-config.md) — common `VMConfig` shape covering both OSes + per-OS builder sketch.
+- [Unified config model](unified-config.md) — common `VMConfig` shape + per-technique builder sketch (two builders cover three OSes).
 
-## Three blockers, three answers
+## Two paths, three OS targets
 
-| Blocker | Answer |
-|---|---|
-| No-VNC install for Alpine | Stock ISO + serial pexpect: wait at `localhost login:`, type `root`, fetch answers via `wget`, run `setup-alpine -ef`. Custom-ISO/apkovl is a fallback. |
-| No-VNC install for Ubuntu | CIDATA seed ISO + `-kernel`/`-initrd` extracted from live-server ISO + `-append "autoinstall ..."` |
-| Reboot/CD-eject handling | `-no-reboot` + watch QMP `SHUTDOWN` event + relaunch without install drive |
+| OS family | Path | Time to SSH-ready (TCG) |
+|---|---|---|
+| Alpine | Stock ISO + serial pexpect typing 3 commands at root prompt | 2-4 min |
+| Debian + Ubuntu | Cloud image qcow2 + NoCloud cidata seed | 30-60 s |
+
+Reboot/CD-eject handling is shared: `-no-reboot` + watch QMP `SHUTDOWN` event + relaunch without install drive (only relevant for the Alpine path; cloud images don't need a second launch).
 
 ## Working baseline (manual VNC, current state)
 
