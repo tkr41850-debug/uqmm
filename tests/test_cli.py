@@ -1,3 +1,5 @@
+from pathlib import Path
+
 import pytest
 
 from uqmm.cli import main
@@ -35,7 +37,6 @@ def test_status_zero_vms(
 @pytest.mark.parametrize(
     "cmd",
     [
-        ["create", "vm1", "--os", "alpine", "--version", "3.21"],
         ["start", "vm1"],
         ["stop", "vm1"],
         ["delete", "vm1"],
@@ -53,6 +54,17 @@ def test_stub_commands_exit_with_not_implemented(
     # Stubs intentionally raise so a stale stub call is loud rather than silent.
     with pytest.raises(NotImplementedError):
         main(cmd)
+
+
+def test_create_alpine_still_unimplemented_in_phase_2(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    monkeypatch.setenv("XDG_DATA_HOME", str(tmp_path / "d"))
+    monkeypatch.setenv("XDG_CACHE_HOME", str(tmp_path / "c"))
+    key = tmp_path / "id.pub"
+    key.write_text("ssh-ed25519 AAA test@host\n")
+    with pytest.raises(NotImplementedError):
+        main(["create", "vm1", "--os", "alpine", "--version", "3.21", "--key", str(key)])
 
 
 def test_list_zero_vms(

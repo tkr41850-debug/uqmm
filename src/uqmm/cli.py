@@ -1,21 +1,24 @@
 """uqmm command-line entry point.
 
-This is the phase-1 skeleton: cyclopts wires up the full flag surface so
-`--help` is meaningful, but commands that need a builder/QEMU stack
-raise NotImplementedError. They get filled in by phases 2-4.
-
 See docs/design/cli.md for the command contract.
 """
 
 from __future__ import annotations
 
+import asyncio
+import shutil
 import sys
+from asyncio.subprocess import Process
 from pathlib import Path
 from typing import Annotated
 
 from cyclopts import App, Parameter
 
 from uqmm import state
+from uqmm.builders.cloudimg import CloudImageBuilder
+from uqmm.config import VMConfig
+from uqmm.qemu import process as qemu_process
+from uqmm.ssh import wait_ready
 
 # version_flags=() disables cyclopts' built-in --version (which would otherwise
 # eat `create --version <ver>` and short-circuit before the subcommand runs).
@@ -40,10 +43,92 @@ def create(
         list[Path] | None, Parameter(help="Public-key path(s); repeat for multiple")
     ] = None,
     hostname: str | None = None,
-) -> None:
+) -> int:
     """Provision a VM and boot it until SSH-ready (Docker-style)."""
-    del name, os, version, image, vcpus, memory_mb, disk_size_gb, ssh_port, user, key, hostname
-    raise NotImplementedError("create: phase 2/3")
+    if os not in ("alpine", "debian", "ubuntu"):
+        print(f"unsupported os: {os}", file=sys.stderr)
+        return 2
+
+    keys = _load_keys(key)
+    if not keys:
+        print(
+            "no SSH key supplied — pass --key or generate ~/.ssh/id_ed25519.pub",
+            file=sys.stderr,
+        )
+        return 2
+
+    vm_dir = state.vm_dir(name)
+    if vm_dir.exists():
+        print(f"VM directory already exists: {vm_dir}", file=sys.stderr)
+        return 1
+
+    resolved_port = (
+        ssh_port if ssh_port is not None else state.pick_ssh_port(state.read_occupied_ports())
+    )
+
+    cfg = VMConfig(
+        name=name,
+        os=os,  # pyright: ignore[reportArgumentType] — narrowed above
+        version=version,
+        image=image,
+        vcpus=vcpus,
+        memory_mb=memory_mb,
+        disk_size_gb=disk_size_gb,
+        ssh_port=resolved_port,
+        user=user,
+        ssh_authorized_keys=keys,
+        hostname=hostname,
+    )
+
+    if os == "alpine":
+        raise NotImplementedError("alpine create: phase 3")
+
+    vm_dir.mkdir(parents=True)
+    return asyncio.run(_create_cloudimg(cfg, vm_dir))
+
+
+async def _create_cloudimg(cfg: VMConfig, vm_dir: Path) -> int:
+    """Drive the cloud-image branch: build, launch, wait SSH, persist."""
+    try:
+        artifacts = CloudImageBuilder().build(cfg, vm_dir)
+        proc = await _launch_qemu(
+            artifacts.qemu_install_args,
+            pidfile=vm_dir / "qemu.pid",
+            stderr_log=vm_dir / "install.log",
+        )
+        del proc
+        assert cfg.ssh_port is not None  # guaranteed by allocator
+        await _wait_ssh_ready("127.0.0.1", cfg.ssh_port)
+    except BaseException:
+        cfg.state = "failed"
+        cfg.save(vm_dir / "config.json")
+        raise
+    cfg.save(vm_dir / "config.json")
+    print(f"{cfg.name} ready: ssh -p {cfg.ssh_port} {cfg.user}@127.0.0.1")
+    return 0
+
+
+async def _launch_qemu(args: list[str], pidfile: Path, stderr_log: Path) -> Process:
+    """Indirection so tests can patch this without touching qemu.process."""
+    return await qemu_process.launch(args, pidfile=pidfile, stderr_log=stderr_log)
+
+
+async def _wait_ssh_ready(host: str, port: int) -> None:
+    """Indirection so tests can patch this without touching ssh module."""
+    await wait_ready(host, port)
+
+
+def _load_keys(key_paths: list[Path] | None) -> list[str]:
+    """Read each --key file's contents (one or more keys per file)."""
+    if key_paths is None:
+        return []
+    out: list[str] = []
+    for p in key_paths:
+        for line in p.read_text().splitlines():
+            stripped = line.strip()
+            if stripped and not stripped.startswith("#"):
+                out.append(stripped)
+    return out
 
 
 @app.command
@@ -126,3 +211,8 @@ def main(argv: list[str] | None = None) -> int:
     if isinstance(result, int):
         return result
     return 0
+
+
+# `shutil` is imported for use in phase 4 (`delete`); keep it referenced so
+# the import survives ruff's unused-import check until then.
+_ = shutil
