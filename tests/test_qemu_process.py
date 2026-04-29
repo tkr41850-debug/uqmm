@@ -8,6 +8,40 @@ from uqmm.qemu.process import launch
 
 
 @pytest.mark.asyncio
+async def test_C9_pidfile_atomic_via_tmp_rename(tmp_path: Path) -> None:
+    pidfile = tmp_path / "qemu.pid"
+    stderr_log = tmp_path / "stderr.log"
+    written_paths: list[str] = []
+    original_write = Path.write_text
+
+    def track_write(self: Path, text: str, *args: object, **kwargs: object) -> None:
+        written_paths.append(str(self))
+        original_write(self, text, *args, **kwargs)  # type: ignore[arg-type]
+
+    fake_proc = MagicMock()
+    fake_proc.pid = 12345
+    fake_proc.stderr = AsyncMock()
+    fake_proc.stderr.readline = AsyncMock(return_value=b"")
+    fake_proc.wait = AsyncMock(return_value=0)
+
+    with (
+        patch(
+            "uqmm.qemu.process.asyncio.create_subprocess_exec",
+            new=AsyncMock(return_value=fake_proc),
+        ),
+        patch.object(Path, "write_text", track_write),
+    ):
+        await launch(["qemu-system-x86_64"], pidfile=pidfile, stderr_log=stderr_log)
+
+    # write_text called once on the .tmp file; os.replace does the rename
+    assert len(written_paths) == 1
+    assert written_paths[0].endswith(".tmp")
+    assert pidfile.exists()
+    assert not Path(written_paths[0]).exists()  # noqa: ASYNC240
+    assert pidfile.read_text().strip() == "12345"
+
+
+@pytest.mark.asyncio
 async def test_launch_writes_pidfile(tmp_path: Path) -> None:
     pidfile = tmp_path / "qemu.pid"
     stderr_log = tmp_path / "stderr.log"

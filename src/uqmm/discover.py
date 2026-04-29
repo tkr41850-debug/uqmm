@@ -5,6 +5,7 @@ See docs/design/cli.md § Status discovery.
 
 from __future__ import annotations
 
+import asyncio
 import contextlib
 import os
 import socket
@@ -14,7 +15,9 @@ from typing import Literal
 from uqmm.config import VMConfig
 from uqmm.qemu import qmp
 
-Status = Literal["not-created", "stopped", "starting", "running", "unreachable", "failed"]
+Status = Literal[
+    "not-created", "stopped", "starting", "running", "unreachable", "failed", "invalid-config"
+]
 
 
 async def probe(vm_dir: Path) -> Status:
@@ -23,8 +26,15 @@ async def probe(vm_dir: Path) -> Status:
     if not cfg_path.exists():
         return "not-created"
 
-    cfg = VMConfig.load(cfg_path)
+    try:
+        cfg = VMConfig.load(cfg_path)
+    except (ValueError, OSError):
+        return "invalid-config"
+
     if cfg.state == "failed":
+        return "failed"
+
+    if cfg.state == "creating":
         return "failed"
 
     pidfile = vm_dir / "qemu.pid"
@@ -34,8 +44,13 @@ async def probe(vm_dir: Path) -> Status:
     try:
         pid = int(pidfile.read_text().strip())
     except (ValueError, OSError):
-        pidfile.unlink(missing_ok=True)
-        return "stopped"
+        # Retry once after 50ms — a mid-write partial read resolves quickly.
+        await asyncio.sleep(0.05)
+        try:
+            pid = int(pidfile.read_text().strip())
+        except (ValueError, OSError):
+            pidfile.unlink(missing_ok=True)
+            return "stopped"
 
     try:
         os.kill(pid, 0)

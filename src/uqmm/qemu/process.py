@@ -9,6 +9,7 @@ process across CLI invocations.
 from __future__ import annotations
 
 import asyncio
+import os
 from asyncio.subprocess import DEVNULL, PIPE, Process
 from pathlib import Path
 
@@ -21,7 +22,9 @@ _DRAIN_TASKS: set[asyncio.Task[None]] = set()
 async def launch(args: list[str], pidfile: Path, stderr_log: Path) -> Process:
     """Spawn `args` as a subprocess; drain stderr to `stderr_log`; write PID."""
     proc = await asyncio.create_subprocess_exec(*args, stdout=DEVNULL, stderr=PIPE)
-    pidfile.write_text(f"{proc.pid}\n")  # noqa: ASYNC240 — tiny synchronous write
+    tmp = pidfile.with_suffix(pidfile.suffix + ".tmp")
+    tmp.write_text(f"{proc.pid}\n")
+    os.replace(tmp, pidfile)
     drain = asyncio.create_task(_drain_stderr(proc, stderr_log))
     _DRAIN_TASKS.add(drain)
     drain.add_done_callback(_DRAIN_TASKS.discard)

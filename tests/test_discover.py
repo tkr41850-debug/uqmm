@@ -7,6 +7,47 @@ from uqmm.config import VMConfig
 from uqmm.discover import probe
 
 
+@pytest.mark.asyncio
+async def test_C9_probe_retries_partial_pidfile(tmp_path: Path) -> None:
+    """When the pidfile is empty on first read, retry before unlinking."""
+    vm_dir = _make_vm(tmp_path)
+    pidfile = vm_dir / "qemu.pid"
+    pidfile.write_text("")  # empty — simulates partial write
+
+    read_count = {"n": 0}
+    original_read_text = Path.read_text
+
+    def patched_read_text(self: Path, *args: object, **kwargs: object) -> str:
+        if self.name == "qemu.pid":
+            read_count["n"] += 1
+            if read_count["n"] == 1:
+                return ""  # first read: partial/empty
+            return "12345\n"  # second read: complete
+        return original_read_text(self, *args, **kwargs)  # type: ignore[arg-type]
+
+    fake_qmp = MagicMock()
+    fake_qmp.disconnect = AsyncMock()
+
+    with (
+        patch.object(Path, "read_text", patched_read_text),
+        patch("uqmm.discover.asyncio.sleep", new=AsyncMock()),
+        patch("uqmm.discover.os.kill", return_value=None),
+        patch("uqmm.discover.qmp.connect", new=AsyncMock(side_effect=TimeoutError)),
+    ):
+        result = await probe(vm_dir)
+
+    assert result == "starting"
+    assert pidfile.exists()  # not unlinked on retry success
+
+
+@pytest.mark.asyncio
+async def test_P10_probe_returns_invalid_config_on_corrupt_json(tmp_path: Path) -> None:
+    vm_dir = tmp_path / "vm"
+    vm_dir.mkdir()
+    (vm_dir / "config.json").write_text("{ not valid json")
+    assert await probe(vm_dir) == "invalid-config"
+
+
 def _make_vm(tmp_path: Path, **cfg_kw: object) -> Path:
     vm_dir = tmp_path / "vm"
     vm_dir.mkdir(parents=True, exist_ok=True)
