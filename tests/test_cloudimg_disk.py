@@ -10,26 +10,33 @@ def test_prepare_disk_runs_create_then_resize(tmp_path: Path) -> None:
     base = tmp_path / "base.qcow2"
     base.write_bytes(b"")
     out = tmp_path / "disk.qcow2"
+    # prepare_disk writes to a .tmp sidecar, then os.replace() → out.
+    tmp = out.with_suffix(out.suffix + ".tmp")
 
-    with patch("uqmm.builders.cloudimg.subprocess.run") as run:
-        run.return_value = MagicMock(returncode=0)
+    def _fake_run(cmd: list[str], **_kw: object) -> MagicMock:
+        # First call (create) must create the .tmp file so os.replace() succeeds.
+        if cmd[1] == "create":
+            tmp.write_bytes(b"")
+        return MagicMock(returncode=0)
+
+    with patch("uqmm.builders.cloudimg.subprocess.run", side_effect=_fake_run) as run:
         prepare_disk(base, out, size_gb=20)
 
     assert run.call_count == 2
     create_argv: list[str] = list(run.call_args_list[0].args[0])
     resize_argv: list[str] = list(run.call_args_list[1].args[0])
 
-    # create: qemu-img create -f qcow2 -F qcow2 -b <base> <out>
+    # create: qemu-img create -f qcow2 -F qcow2 -b <base> <tmp>
     assert create_argv[0] == "qemu-img"
     assert create_argv[1] == "create"
     assert "-f" in create_argv and create_argv[create_argv.index("-f") + 1] == "qcow2"
     assert "-F" in create_argv and create_argv[create_argv.index("-F") + 1] == "qcow2"
     assert "-b" in create_argv and create_argv[create_argv.index("-b") + 1] == str(base)
-    assert create_argv[-1] == str(out)
+    assert create_argv[-1] == str(tmp)
 
-    # resize: qemu-img resize <out> 20G
+    # resize: qemu-img resize <tmp> 20G (rename happens after both commands)
     assert resize_argv[:2] == ["qemu-img", "resize"]
-    assert resize_argv[-2] == str(out)
+    assert resize_argv[-2] == str(tmp)
     assert resize_argv[-1] == "20G"
 
 

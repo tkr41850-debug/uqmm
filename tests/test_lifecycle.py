@@ -136,10 +136,12 @@ def test_start_with_wait_polls_ssh(monkeypatch: pytest.MonkeyPatch, tmp_path: Pa
     _make_vm(tmp_path)
     builder = MagicMock()
     builder.runtime_args = MagicMock(return_value=["qemu-system-x86_64"])
+    fake_proc = MagicMock()
+    fake_proc.wait = AsyncMock(return_value=0)
     with (
         patch("uqmm.cli.probe", new=AsyncMock(return_value="stopped")),
         patch("uqmm.cli.CloudImageBuilder", return_value=builder),
-        patch("uqmm.cli._launch_qemu", new=AsyncMock(return_value=MagicMock())),
+        patch("uqmm.cli._launch_qemu", new=AsyncMock(return_value=fake_proc)),
         patch("uqmm.cli._wait_ssh_ready", new=AsyncMock()) as wait_ssh,
     ):
         rc = main(["start", "vm1", "--wait"])

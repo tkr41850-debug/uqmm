@@ -104,9 +104,15 @@ def prepare_disk(base: Path, out: Path, size_gb: int) -> None:
     auto-grow their root partition via cloud-initramfs-growroot on first
     boot, but only up to the qcow2 size, so the resize must happen *before*
     the first boot.
+
+    Writes to a .tmp sidecar and renames on success so a failed resize
+    leaves no partial overlay behind (R3).
     """
+    import os
+
     if not base.exists():
         raise FileNotFoundError(f"base image not found: {base}")
+    tmp = out.with_suffix(out.suffix + ".tmp")
     create_cmd = [
         "qemu-img",
         "create",
@@ -116,15 +122,20 @@ def prepare_disk(base: Path, out: Path, size_gb: int) -> None:
         "qcow2",
         "-b",
         str(base),
-        str(out),
+        str(tmp),
     ]
-    resize_cmd = ["qemu-img", "resize", str(out), f"{size_gb}G"]
-    for cmd in (create_cmd, resize_cmd):
-        try:
-            subprocess.run(cmd, check=True, capture_output=True)
-        except subprocess.CalledProcessError as e:
-            stderr = e.stderr.decode("utf-8", errors="replace") if e.stderr else ""
-            raise RuntimeError(f"{cmd[0]} {cmd[1]} failed: {stderr.strip()}") from e
+    resize_cmd = ["qemu-img", "resize", str(tmp), f"{size_gb}G"]
+    try:
+        for cmd in (create_cmd, resize_cmd):
+            try:
+                subprocess.run(cmd, check=True, capture_output=True)
+            except subprocess.CalledProcessError as e:
+                stderr = e.stderr.decode("utf-8", errors="replace") if e.stderr else ""
+                raise RuntimeError(f"{cmd[0]} {cmd[1]} failed: {stderr.strip()}") from e
+        os.replace(tmp, out)
+    except BaseException:
+        tmp.unlink(missing_ok=True)
+        raise
 
 
 class CloudImageBuilder:
@@ -141,12 +152,9 @@ class CloudImageBuilder:
         prepare_disk(base, disk, size_gb=cfg.disk_size_gb)
         build_seed_iso(render_user_data(cfg), render_meta_data(cfg), seed)
 
-        args = _qemu_args(cfg, vm_dir, disk, seed)
-        # Cloud image: no separate install phase. Same args drive the
-        # cloud-init-on-first-boot run and every subsequent boot.
         return InstallArtifacts(
-            qemu_install_args=args,
-            qemu_runtime_args=args,
+            qemu_install_args=_qemu_install_args(cfg, vm_dir, disk, seed),
+            qemu_runtime_args=_qemu_runtime_args(cfg, vm_dir, disk, seed),
             seed_paths=[disk, seed],
         )
 
@@ -159,14 +167,32 @@ class CloudImageBuilder:
         """
         if cfg.ssh_port is None:
             raise ValueError("ssh_port must be resolved before runtime_args")
-        return _qemu_args(cfg, vm_dir, vm_dir / "disk.qcow2", vm_dir / "seed.iso")
+        disk = vm_dir / "disk.qcow2"
+        seed = vm_dir / "seed.iso"
+        if not disk.exists():
+            raise FileNotFoundError(f"missing runtime artifact: {disk}")
+        if not seed.exists():
+            raise FileNotFoundError(f"missing runtime artifact: {seed}")
+        return _qemu_runtime_args(cfg, vm_dir, disk, seed)
 
 
-def _qemu_args(cfg: VMConfig, vm_dir: Path, disk: Path, seed: Path) -> list[str]:
-    # -no-reboot: a guest reboot during create is almost always cloud-init
-    # tripping over its own configuration. Letting QEMU exit on the reboot
-    # turns that into a fast-fail (caller sees process exit; SSH-wait
-    # surfaces a clear timeout) rather than a silent loop.
+def _qemu_install_args(cfg: VMConfig, vm_dir: Path, disk: Path, seed: Path) -> list[str]:
+    # -no-reboot: a guest reboot during cloud-init first boot almost always
+    # indicates a config error; QEMU exit makes it a fast-fail.
+    assert cfg.ssh_port is not None
+    return [
+        *_qemu_base_args(cfg, vm_dir, disk, seed),
+        "-no-reboot",
+    ]
+
+
+def _qemu_runtime_args(cfg: VMConfig, vm_dir: Path, disk: Path, seed: Path) -> list[str]:
+    # No -no-reboot at runtime: `sudo reboot` should reboot the guest, not stop it.
+    assert cfg.ssh_port is not None
+    return _qemu_base_args(cfg, vm_dir, disk, seed)
+
+
+def _qemu_base_args(cfg: VMConfig, vm_dir: Path, disk: Path, seed: Path) -> list[str]:
     assert cfg.ssh_port is not None
     return [
         "qemu-system-x86_64",
@@ -179,7 +205,6 @@ def _qemu_args(cfg: VMConfig, vm_dir: Path, disk: Path, seed: Path) -> list[str]
         "-m",
         str(cfg.memory_mb),
         "-nographic",
-        "-no-reboot",
         "-drive",
         f"file={disk},if=virtio",
         "-drive",

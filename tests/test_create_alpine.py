@@ -14,11 +14,9 @@ def _key(tmp: Path) -> Path:
 
 
 def _patches(art: InstallArtifacts):
-    fake_proc_install = MagicMock()
-    fake_proc_install.pid = 4242
+    fake_proc_install = MagicMock(pid=4242)
     fake_proc_install.wait = AsyncMock(return_value=0)
-    fake_proc_runtime = MagicMock()
-    fake_proc_runtime.pid = 4243
+    fake_proc_runtime = MagicMock(pid=4243)
     fake_proc_runtime.wait = AsyncMock(return_value=0)
 
     return (

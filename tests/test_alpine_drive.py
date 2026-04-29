@@ -1,4 +1,4 @@
-# pyright: reportUnknownMemberType=false, reportUnknownVariableType=false, reportUnknownArgumentType=false
+# pyright: reportUnknownMemberType=false, reportUnknownVariableType=false, reportUnknownArgumentType=false, reportPrivateUsage=false
 
 from collections.abc import Iterable
 from typing import Any
@@ -100,7 +100,7 @@ def test_drive_install_does_not_send_password_prompts() -> None:
         "root",
         "stty cols 200",
         "ifconfig eth0 up && udhcpc -i eth0",
-        "wget -O /tmp/answers http://10.0.2.2:9999/answers && export ERASE_DISKS=/dev/vda && setup-alpine -ef /tmp/answers && echo UQMM_INSTALL_DONE",
+        "wget -O /tmp/answers http://10.0.2.2:9999/answers && export ERASE_DISKS=/dev/vda && setup-alpine -ef /tmp/answers && echo UQMM_INSTALL_DONE",  # noqa: E501
         "reboot",
     ]
 

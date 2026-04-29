@@ -10,6 +10,8 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import time
+from collections.abc import Coroutine
+from typing import Any
 
 _BANNER_PREFIX = b"SSH-"
 
@@ -48,3 +50,30 @@ async def wait_ready(
             return
         await asyncio.sleep(1.0)
     raise TimeoutError(f"SSH banner at {host}:{port} not seen within {timeout}s") from last_err
+
+
+async def wait_ready_or_proc_exit(
+    host: str,
+    port: int,
+    proc_coro: Coroutine[Any, Any, int],
+    timeout: float = 300.0,  # noqa: ASYNC109 — explicit timeout matches caller ergonomics
+) -> None:
+    """Race SSH readiness against process exit.
+
+    Raises RuntimeError if the process exits before SSH becomes ready.
+    """
+    ssh_task: asyncio.Task[None] = asyncio.create_task(wait_ready(host, port, timeout=timeout))
+    proc_task: asyncio.Task[int] = asyncio.create_task(proc_coro)
+    done, pending = await asyncio.wait(
+        {ssh_task, proc_task},
+        return_when=asyncio.FIRST_COMPLETED,
+    )
+    for t in pending:
+        t.cancel()
+        with contextlib.suppress(asyncio.CancelledError):
+            await t
+    if proc_task in done and ssh_task not in done:
+        code = proc_task.result()
+        raise RuntimeError(f"qemu exited with code {code} before SSH became ready; see install.log")
+    if ssh_task in done:
+        ssh_task.result()

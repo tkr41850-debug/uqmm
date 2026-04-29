@@ -7,6 +7,7 @@ docs/design/config.md § AlpineSeedBuilder for the build/runtime split.
 from __future__ import annotations
 
 import subprocess
+import sys
 from pathlib import Path
 
 from uqmm.builders.base import InstallArtifacts
@@ -48,13 +49,25 @@ APKCACHEOPTS="none"
 
 
 def build_disk(disk: Path, size_gb: int) -> None:
-    """Create an empty qcow2 disk for setup-alpine to install into."""
-    cmd = ["qemu-img", "create", "-f", "qcow2", str(disk), f"{size_gb}G"]
+    """Create an empty qcow2 disk for setup-alpine to install into.
+
+    Writes to a .tmp sidecar and renames on success so a failed create
+    leaves no partial disk behind (R3).
+    """
+    import os
+
+    tmp = disk.with_suffix(disk.suffix + ".tmp")
+    cmd = ["qemu-img", "create", "-f", "qcow2", str(tmp), f"{size_gb}G"]
     try:
-        subprocess.run(cmd, check=True, capture_output=True)
-    except subprocess.CalledProcessError as e:
-        stderr = e.stderr.decode("utf-8", errors="replace") if e.stderr else ""
-        raise RuntimeError(f"qemu-img create failed: {stderr.strip()}") from e
+        try:
+            subprocess.run(cmd, check=True, capture_output=True)
+        except subprocess.CalledProcessError as e:
+            stderr = e.stderr.decode("utf-8", errors="replace") if e.stderr else ""
+            raise RuntimeError(f"qemu-img create failed: {stderr.strip()}") from e
+        os.replace(tmp, disk)
+    except BaseException:
+        tmp.unlink(missing_ok=True)
+        raise
 
 
 class AlpineSeedBuilder:
@@ -92,7 +105,10 @@ class AlpineSeedBuilder:
         """
         if cfg.ssh_port is None:
             raise ValueError("ssh_port must be resolved before runtime_args")
-        return _qemu_runtime_args(cfg, vm_dir, vm_dir / "disk.qcow2")
+        disk = vm_dir / "disk.qcow2"
+        if not disk.exists():
+            raise FileNotFoundError(f"missing runtime artifact: {disk}")
+        return _qemu_runtime_args(cfg, vm_dir, disk)
 
 
 def _common_args(cfg: VMConfig, vm_dir: Path, *, smp: int, mem_mb: int) -> list[str]:
@@ -118,12 +134,19 @@ def _common_args(cfg: VMConfig, vm_dir: Path, *, smp: int, mem_mb: int) -> list[
 
 
 def _qemu_install_args(cfg: VMConfig, vm_dir: Path, disk: Path, iso: Path) -> list[str]:
-    # Alpine install needs more than the default 2 vcpus / 2 GiB to finish
-    # apk-add openssh + reboot in a reasonable time under TCG; bump the
-    # minimum *only at install time* — the stored cfg is unchanged, and the
-    # runtime relaunch uses the user's actual request.
     install_smp = max(cfg.vcpus, 4)
     install_mem = max(cfg.memory_mb, 4096)
+    bumps: list[str] = []
+    if cfg.vcpus < 4:
+        bumps.append(f"vcpus {cfg.vcpus} → {install_smp}")
+    if cfg.memory_mb < 4096:
+        bumps.append(f"memory {cfg.memory_mb}MB → {install_mem}MB")
+    if bumps:
+        print(
+            f"note: alpine install raised {', '.join(bumps)};"
+            " runtime will use your requested values",
+            file=sys.stderr,
+        )
     return [
         *_common_args(cfg, vm_dir, smp=install_smp, mem_mb=install_mem),
         "-cdrom",

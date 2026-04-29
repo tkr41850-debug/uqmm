@@ -34,6 +34,16 @@ class VMConfig:
 
     state: State = "created"
 
+    def __post_init__(self) -> None:
+        if self.vcpus < 1:
+            raise ValueError(f"vcpus must be >= 1, got {self.vcpus}")
+        if self.vcpus > 64:
+            raise ValueError(f"vcpus {self.vcpus} looks like a typo (max 64)")
+        if self.memory_mb < 64:
+            raise ValueError(f"memory_mb must be >= 64, got {self.memory_mb}")
+        if self.memory_mb > 1_048_576:
+            raise ValueError(f"memory_mb {self.memory_mb} looks like a typo (max 1048576)")
+
     def effective_hostname(self) -> str:
         return self.hostname if self.hostname is not None else self.name
 

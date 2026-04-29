@@ -63,6 +63,31 @@ def read_occupied_ports() -> set[int]:
     return ports
 
 
+def validate_vm_name(name: str) -> None:
+    """Raise ValueError if name is not a safe VM/hostname identifier."""
+    import re
+
+    if not name:
+        raise ValueError("VM name must not be empty")
+    if len(name) > 64:
+        raise ValueError(f"VM name too long ({len(name)} > 64): {name!r}")
+    if not re.fullmatch(r"[A-Za-z0-9._-]+", name):
+        raise ValueError(f"VM name {name!r} contains invalid characters (allowed: A-Za-z0-9._-)")
+    if name[0] in (".", "-"):
+        raise ValueError(f"VM name must not start with '.' or '-': {name!r}")
+
+
+def is_port_bindable(port: int) -> bool:
+    """Return True if port can be bound on 127.0.0.1."""
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+        s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+        try:
+            s.bind(("127.0.0.1", port))
+            return True
+        except OSError:
+            return False
+
+
 def pick_ssh_port(occupied: set[int], lo: int = 22000, hi: int = 23000) -> int:
     """Find the first free port in `[lo, hi]` not in `occupied`.
 

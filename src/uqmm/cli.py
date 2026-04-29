@@ -64,7 +64,16 @@ def create(
         print(f"unsupported os: {os}", file=sys.stderr)
         return 2
 
-    keys = _load_keys(key)
+    try:
+        state.validate_vm_name(name)
+    except ValueError as e:
+        print(str(e), file=sys.stderr)
+        return 2
+
+    keys, key_err = _load_keys(key)
+    if key_err:
+        print(key_err, file=sys.stderr)
+        return 2
     if not keys:
         print(
             "no SSH key supplied — pass --key or generate ~/.ssh/id_ed25519.pub",
@@ -72,10 +81,27 @@ def create(
         )
         return 2
 
+    try:
+        VMConfig(
+            name=name,
+            os=os,  # pyright: ignore[reportArgumentType]
+            version=version,
+            vcpus=vcpus,
+            memory_mb=memory_mb,
+        )
+    except ValueError as e:
+        print(str(e), file=sys.stderr)
+        return 2
+
+    if ssh_port is not None:
+        if ssh_port < 1024 or ssh_port > 65535:
+            print(f"--ssh-port {ssh_port} must be in 1024-65535", file=sys.stderr)
+            return 2
+        if not state.is_port_bindable(ssh_port):
+            print(f"port {ssh_port} is unavailable (in use or privileged)", file=sys.stderr)
+            return 2
+
     vm_dir = state.vm_dir(name)
-    if vm_dir.exists():
-        print(f"VM directory already exists: {vm_dir}", file=sys.stderr)
-        return 1
 
     try:
         resolved_port = (
@@ -84,6 +110,22 @@ def create(
     except ValueError as e:
         print(str(e), file=sys.stderr)
         return 1
+
+    if vm_dir.exists():
+        return _handle_existing_vm_dir(
+            vm_dir,
+            name,
+            os,
+            version,
+            image,
+            vcpus,
+            memory_mb,
+            disk_size_gb,
+            resolved_port,
+            user,
+            keys,
+            hostname,
+        )
 
     cfg = VMConfig(
         name=name,
@@ -97,12 +139,128 @@ def create(
         user=user,
         ssh_authorized_keys=keys,
         hostname=hostname,
+        state="creating",
     )
 
     vm_dir.mkdir(parents=True)
+    cfg.save(vm_dir / "config.json")
+    try:
+        if os == "alpine":
+            rc = asyncio.run(_create_alpine(cfg, vm_dir))
+        else:
+            rc = asyncio.run(_create_cloudimg(cfg, vm_dir))
+    except Exception:
+        # Ensure config.json is marked failed even for uncaught exceptions.
+        cfg_path = vm_dir / "config.json"
+        if cfg_path.exists():
+            try:
+                saved = VMConfig.load(cfg_path)
+                if saved.state == "creating":
+                    cfg.state = "failed"
+                    cfg.save(cfg_path)
+            except Exception:
+                pass
+        raise
+    return rc
+
+
+def _handle_existing_vm_dir(
+    vm_dir: Path,
+    name: str,
+    os: str,
+    version: str,
+    image: str | None,
+    vcpus: int,
+    memory_mb: int,
+    disk_size_gb: int,
+    ssh_port: int,
+    user: str,
+    keys: list[str],
+    hostname: str | None,
+) -> int:
+    """Handle create when vm_dir already exists (R1/R5/R14 state machine)."""
+    try:
+        saved = VMConfig.load(vm_dir / "config.json")
+    except (ValueError, OSError):
+        print(f"VM directory exists but config.json is corrupt: {vm_dir}", file=sys.stderr)
+        return 1
+
+    new_cfg = VMConfig(
+        name=name,
+        os=os,  # pyright: ignore[reportArgumentType]
+        version=version,
+        image=image,
+        vcpus=vcpus,
+        memory_mb=memory_mb,
+        disk_size_gb=disk_size_gb,
+        ssh_port=ssh_port,
+        user=user,
+        ssh_authorized_keys=keys,
+        hostname=hostname,
+        state="creating",
+    )
+
+    if saved.state == "created":
+        if _configs_match(saved, new_cfg):
+            print(
+                f"{name} already created; run `uqmm start --wait {name}` to boot", file=sys.stdout
+            )
+            return 0
+        _print_config_diff(saved, new_cfg)
+        print(f"use `uqmm delete {name} && uqmm create {name} ...` to reconfigure", file=sys.stderr)
+        return 1
+
+    # failed or creating — resume
+    disk_fields = ("os", "version", "image", "disk_size_gb")
+    for f in disk_fields:
+        if getattr(saved, f) != getattr(new_cfg, f):
+            _print_config_diff(saved, new_cfg)
+            print(f"disk-affecting fields differ; use `uqmm delete {name}` first", file=sys.stderr)
+            return 1
+
+    # Regenerate seed from current args; reuse disk if present
+    new_cfg.state = "creating"
+    new_cfg.save(vm_dir / "config.json")
     if os == "alpine":
-        return asyncio.run(_create_alpine(cfg, vm_dir))
-    return asyncio.run(_create_cloudimg(cfg, vm_dir))
+        return asyncio.run(_create_alpine(new_cfg, vm_dir))
+    return asyncio.run(_create_cloudimg(new_cfg, vm_dir))
+
+
+def _configs_match(a: VMConfig, b: VMConfig) -> bool:
+    fields = (
+        "os",
+        "version",
+        "image",
+        "vcpus",
+        "memory_mb",
+        "disk_size_gb",
+        "ssh_port",
+        "user",
+        "hostname",
+    )
+    for f in fields:
+        if getattr(a, f) != getattr(b, f):
+            return False
+    return sorted(a.ssh_authorized_keys) == sorted(b.ssh_authorized_keys)
+
+
+def _print_config_diff(saved: VMConfig, new: VMConfig) -> None:
+    fields = (
+        "os",
+        "version",
+        "image",
+        "vcpus",
+        "memory_mb",
+        "disk_size_gb",
+        "ssh_port",
+        "user",
+        "hostname",
+        "ssh_authorized_keys",
+    )
+    for f in fields:
+        av, bv = getattr(saved, f), getattr(new, f)
+        if av != bv:
+            print(f"  {f}: {av!r} → {bv!r}", file=sys.stderr)
 
 
 async def _create_cloudimg(cfg: VMConfig, vm_dir: Path) -> int:
@@ -116,7 +274,7 @@ async def _create_cloudimg(cfg: VMConfig, vm_dir: Path) -> int:
             stderr_log=vm_dir / "install.log",
         )
         assert cfg.ssh_port is not None  # guaranteed by allocator
-        await _wait_ssh_ready("127.0.0.1", cfg.ssh_port)
+        await _wait_ssh_or_exit(proc, "127.0.0.1", cfg.ssh_port)
     except BaseException:
         # Reap QEMU so a "failed" state doesn't leave a live qemu-system-* and
         # a stale qemu.pid pointing at it. SIGTERM first; if the process is
@@ -127,6 +285,7 @@ async def _create_cloudimg(cfg: VMConfig, vm_dir: Path) -> int:
         cfg.state = "failed"
         cfg.save(vm_dir / "config.json")
         raise
+    cfg.state = "created"
     cfg.save(vm_dir / "config.json")
     print(f"{cfg.name} ready: ssh -p {cfg.ssh_port} {cfg.user}@127.0.0.1")
     return 0
@@ -166,7 +325,7 @@ async def _create_alpine(cfg: VMConfig, vm_dir: Path) -> int:
             stderr_log=vm_dir / "install.log",
         )
         assert cfg.ssh_port is not None
-        await _wait_ssh_ready("127.0.0.1", cfg.ssh_port)
+        await _wait_ssh_or_exit(proc, "127.0.0.1", cfg.ssh_port)
     except BaseException:
         if proc is not None:
             await _kill_proc(proc)
@@ -180,6 +339,7 @@ async def _create_alpine(cfg: VMConfig, vm_dir: Path) -> int:
         # may never have fetched, leaving serve_forever blocked otherwise.
         if answers is not None:
             answers.stop()
+    cfg.state = "created"
     cfg.save(vm_dir / "config.json")
     print(f"{cfg.name} ready: ssh -p {cfg.ssh_port} {cfg.user}@127.0.0.1")
     return 0
@@ -212,24 +372,53 @@ async def _wait_ssh_ready(host: str, port: int) -> None:
     await wait_ready(host, port)
 
 
+async def _wait_ssh_or_exit(proc: Process, host: str, port: int) -> None:
+    """Race SSH readiness against process exit. Indirection for test patching."""
+    ssh_task: asyncio.Task[None] = asyncio.create_task(_wait_ssh_ready(host, port))
+    proc_task: asyncio.Task[int] = asyncio.create_task(proc.wait())
+    done, pending = await asyncio.wait({ssh_task, proc_task}, return_when=asyncio.FIRST_COMPLETED)
+    for t in pending:
+        t.cancel()
+        with contextlib.suppress(asyncio.CancelledError):
+            await t
+    if proc_task in done and ssh_task not in done:
+        code = proc_task.result()
+        raise RuntimeError(f"qemu exited with code {code} before SSH became ready; see install.log")
+    if ssh_task in done:
+        ssh_task.result()
+
+
 _DEFAULT_KEY_NAMES = ("id_ed25519.pub", "id_rsa.pub")
 
 
-def _load_keys(key_paths: list[Path] | None) -> list[str]:
+def _load_keys(key_paths: list[Path] | None) -> tuple[list[str], str]:
     """Read each --key file's contents (one or more keys per file).
 
     When `key_paths` is None or empty, fall back to ~/.ssh/id_ed25519.pub then
-    ~/.ssh/id_rsa.pub (per cli.md § SSH key resolution). Returns [] only if no
-    key was supplied or discoverable.
+    ~/.ssh/id_rsa.pub. Returns (keys, error_message). error_message is empty on success.
     """
     paths = list(key_paths) if key_paths else _discover_default_keys()
     out: list[str] = []
+    bad: list[str] = []
+    empty: list[str] = []
     for p in paths:
-        for line in p.read_text().splitlines():
-            stripped = line.strip()
-            if stripped and not stripped.startswith("#"):
-                out.append(stripped)
-    return out
+        try:
+            text = p.read_text()
+        except OSError:
+            bad.append(str(p))
+            continue
+        lines = [
+            ln.strip() for ln in text.splitlines() if ln.strip() and not ln.strip().startswith("#")
+        ]
+        if not lines:
+            empty.append(str(p))
+            continue
+        out.extend(lines)
+    if bad:
+        return [], f"key file(s) not found: {', '.join(bad)}"
+    if empty:
+        return [], f"key file(s) are empty: {', '.join(empty)}"
+    return out, ""
 
 
 def _discover_default_keys() -> list[Path]:
@@ -257,15 +446,26 @@ def start(name: str, *, wait: bool = False) -> int:
 
 async def _start(cfg: VMConfig, vm_dir: Path, *, wait_ssh: bool) -> int:
     status = await probe(vm_dir)
-    if status in ("starting", "running", "unreachable"):
+    if status in ("starting", "running"):
         print(f"{cfg.name} is already {status}", file=sys.stderr)
         return 1
+    if status == "unreachable":
+        print(
+            f"{cfg.name} is unreachable (process alive, SSH not responding); "
+            f"try: uqmm stop {cfg.name} --force && uqmm start {cfg.name}",
+            file=sys.stderr,
+        )
+        return 3
 
     # IMPORTANT: do NOT call builder.build() here — that would rerun
     # prepare_disk / build_disk and clobber the installed qcow2. Use
     # runtime_args() which reconstructs args from existing on-disk artifacts.
     builder = AlpineSeedBuilder() if cfg.os == "alpine" else CloudImageBuilder()
-    runtime_args = builder.runtime_args(cfg, vm_dir)
+    try:
+        runtime_args = builder.runtime_args(cfg, vm_dir)
+    except FileNotFoundError as e:
+        print(f"missing artifact: {e}", file=sys.stderr)
+        return 1
 
     proc = await _launch_qemu(
         runtime_args,
@@ -275,7 +475,7 @@ async def _start(cfg: VMConfig, vm_dir: Path, *, wait_ssh: bool) -> int:
     if wait_ssh:
         try:
             assert cfg.ssh_port is not None
-            await _wait_ssh_ready("127.0.0.1", cfg.ssh_port)
+            await _wait_ssh_or_exit(proc, "127.0.0.1", cfg.ssh_port)
         except BaseException:
             await _kill_proc(proc)
             (vm_dir / "qemu.pid").unlink(missing_ok=True)

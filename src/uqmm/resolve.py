@@ -50,10 +50,16 @@ def canonical_url(os: str, version: str) -> str:
     try:
         return _CANONICAL_URLS[(os, version)]
     except KeyError:
-        raise ValueError(
-            f"no canonical image URL for ({os!r}, {version!r}); "
-            f"pass --image to override or add to resolve._CANONICAL_URLS"
-        ) from None
+        import difflib
+
+        known_for_os = [v for (o, v) in _CANONICAL_URLS if o == os]
+        close = difflib.get_close_matches(version, known_for_os, n=3, cutoff=0.4)
+        suggestion = (
+            f"; did you mean: {', '.join(close)}"
+            if close
+            else f"; known: {', '.join(known_for_os) or 'none'}"
+        )
+        raise ValueError(f"no canonical image URL for ({os!r}, {version!r}){suggestion}") from None
 
 
 def cache_path_for(url: str) -> Path:

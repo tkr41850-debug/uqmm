@@ -14,12 +14,14 @@ def _key(tmp: Path) -> Path:
 
 
 def _patches(art: InstallArtifacts):
+    fake_proc = MagicMock(pid=4242)
+    fake_proc.wait = AsyncMock(return_value=0)
     return (
         patch(
             "uqmm.cli.CloudImageBuilder",
             return_value=MagicMock(build=MagicMock(return_value=art)),
         ),
-        patch("uqmm.cli._launch_qemu", new=AsyncMock(return_value=MagicMock(pid=4242))),
+        patch("uqmm.cli._launch_qemu", new=AsyncMock(return_value=fake_proc)),
         patch("uqmm.cli._wait_ssh_ready", new=AsyncMock(return_value=None)),
     )
 

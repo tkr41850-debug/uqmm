@@ -39,8 +39,9 @@ def test_build_invokes_resolve_prepare_seed(tmp_path: Path) -> None:
     assert "instance-id" in meta_data
     assert seed_path == vm_dir / "seed.iso"
 
-    # Cloud-image: install args == runtime args (no separate install boot).
-    assert artifacts.qemu_install_args == artifacts.qemu_runtime_args
+    # P3: install args add -no-reboot; runtime args do not.
+    assert "-no-reboot" in artifacts.qemu_install_args
+    assert "-no-reboot" not in artifacts.qemu_runtime_args
     assert artifacts.seed_paths == [vm_dir / "disk.qcow2", vm_dir / "seed.iso"]
 
 
