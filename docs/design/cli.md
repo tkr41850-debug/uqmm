@@ -1,0 +1,146 @@
+# CLI
+
+uqmm command surface and on-disk state layout.
+
+See [config.md](config.md) for `VMConfig` schema. This doc covers commands, state, and the discovery/lifecycle logic.
+
+## Commands
+
+| Command | Purpose |
+|---|---|
+| `create` | Provision + first boot until SSH-ready (Docker-style). |
+| `start` | Boot an existing (already-created) VM. |
+| `stop` | Graceful shutdown via QMP `system_powerdown`; `--force` for `quit`. |
+| `delete` | Stop if running; remove VM directory; free port. |
+| `status` | Per-VM state. Without `<name>`, shows all. |
+| `list` | Tabular listing of all VMs. |
+| `ssh` | Resolve port, exec `ssh` with passthrough args. |
+| `log` | Print captured serial log; `--follow` tails. |
+
+### `uqmm create <name>`
+
+Docker-style: returns when cloud-init / setup-alpine has succeeded and SSH responds.
+
+```
+uqmm create <name> --os {alpine|debian|ubuntu} --version <v>
+                   [--image PATH_OR_URL]
+                   [--vcpus N] [--memory-mb N] [--disk-size-gb N]
+                   [--ssh-port N] [--user U] [--key PATH]
+                   [--hostname H]
+```
+
+Steps:
+
+1. Resolve image: use `--image` if given (local file or URL); else look up `os + version` → canonical URL (see [research/cloud-image.md](../research/cloud-image.md), [research/alpine-unattended.md](../research/alpine-unattended.md)).
+2. If URL, download to `$XDG_CACHE_HOME/uqmm/images/`. Reuse cached file if present.
+3. Allocate VM directory at `$XDG_DATA_HOME/uqmm/vms/<name>/`. Error if it already exists.
+4. Copy/qcow2-rebase the image to `disk.qcow2`; resize to `disk_size_gb`.
+5. Build seed: CIDATA ISO (cloud-image path) or answer file + local HTTP server (Alpine path).
+6. Allocate hostfwd port if `--ssh-port` not given.
+7. Launch QEMU with `-no-reboot`, QMP socket, serial socket.
+8. Alpine path: drive install via pexpect over serial; wait for QMP `SHUTDOWN`; relaunch without install drive.
+9. Cloud-image path: poll SSH on hostfwd port; QEMU stays running.
+10. Persist resolved config to `config.json`. Return success.
+
+If any step fails, see [Errors during `create`](#errors-during-create) below.
+
+### `uqmm start <name> [--wait]`
+
+Boot an existing VM. Returns immediately by default; `--wait` blocks until SSH banner responds.
+
+### `uqmm stop <name> [--force]`
+
+Graceful by default: send `system_powerdown` via QMP, wait up to 30 s for QEMU process exit, escalate to QMP `quit` if the guest doesn't comply. `--force` skips graceful — `quit` immediately.
+
+### `uqmm delete <name>`
+
+Stops the VM if running, removes `$XDG_DATA_HOME/uqmm/vms/<name>/`, frees the port.
+
+### `uqmm status [<name>]`
+
+Per-VM state. Without `<name>`, shows all VMs.
+
+| State | Meaning |
+|---|---|
+| `not-created` | No VM directory exists. |
+| `stopped` | VM directory exists; no `qemu.pid` or PID is dead. |
+| `starting` | PID alive; QMP socket not yet responding. |
+| `running` | PID alive; QMP responds; SSH port answers SSH banner. |
+| `unreachable` | PID alive; QMP responds; SSH does not answer. |
+| `failed` | Provisioning failed during `create`; needs `delete` + retry. |
+
+### `uqmm list`
+
+Tabular: `name`, `os/version`, `status`, `ssh-port`. Same data source as `status`.
+
+### `uqmm ssh <name> [-- ssh-args...]`
+
+Resolves port from state, execs:
+
+```sh
+ssh -p <port> -o StrictHostKeyChecking=accept-new <user>@127.0.0.1 <ssh-args...>
+```
+
+`StrictHostKeyChecking=accept-new` so first connection auto-pins the host key without surprising the user, but subsequent mismatches still error.
+
+### `uqmm log <name> [--follow]`
+
+Print the captured serial log: `install.log` from create + ongoing serial buffer if running. `--follow` tails like `tail -f` and exits on Ctrl-C.
+
+## On-disk state
+
+Following XDG Base Directory conventions:
+
+```
+$XDG_DATA_HOME/uqmm/                      (default ~/.local/share/uqmm/)
+  vms/
+    <name>/
+      config.json                         serialized VMConfig (incl. resolved ssh_port + state field)
+      disk.qcow2                          main disk
+      seed.iso                            NoCloud cidata (cloud-image path); absent on Alpine path
+      qmp.sock                            present only while running
+      serial.sock                         present only while running
+      qemu.pid                            PID of running qemu-system-*
+      install.log                         captured serial output from create + later sessions
+
+$XDG_CACHE_HOME/uqmm/                     (default ~/.cache/uqmm/)
+  images/
+    debian-13-genericcloud-amd64.qcow2    downloaded base images; re-fetchable
+    noble-server-cloudimg-amd64.img
+    alpine-virt-3.21.0-x86_64.iso
+```
+
+## Status discovery
+
+Walk `$XDG_DATA_HOME/uqmm/vms/*/qemu.pid`. For each:
+
+1. Read PID; check `os.kill(pid, 0)`. `ESRCH` → process dead → mark `stopped`, clean stale pidfile.
+2. Process alive: connect to `qmp.sock`. No response → `starting`.
+3. QMP responds: connect to `127.0.0.1:<ssh_port>`, read 64 bytes. Starts with `SSH-` → `running`. Otherwise → `unreachable`.
+
+Cleaner than scanning the process table; survives PID reuse better.
+
+## Port allocation
+
+`create` picks an unused port in `22000-23000` if `--ssh-port` is not specified:
+
+1. Read every existing VM's `config.json` and collect their `ssh_port` values.
+2. For each candidate in `22000..23000`: skip if in use by another VM, or if `bind()` to `127.0.0.1:port` fails.
+3. First success wins; persist to the new VM's `config.json`.
+
+Port is sticky once recorded — `start` reuses it; `delete` frees it. No separate port-file.
+
+## SSH key resolution
+
+If no `--key` is passed, uqmm tries `~/.ssh/id_ed25519.pub`, then `~/.ssh/id_rsa.pub`. If neither exists, `create` errors with a hint to generate one or pass `--key`. Multiple `--key` flags accumulate.
+
+## Errors during `create`
+
+If install fails partway (cloud-init error, pexpect timeout, QEMU crash):
+
+1. VM directory is left in place so `uqmm log <name>` works for diagnosis.
+2. `config.json` is marked with state `failed`.
+3. `uqmm delete <name>` cleans up.
+4. `uqmm start <name>` refuses on `failed` state — must `delete` and `create` again.
+
+This avoids partial-VM zombies that look `stopped` but have never installed.
