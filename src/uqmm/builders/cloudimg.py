@@ -5,8 +5,10 @@ See docs/design/config.md § CloudImageBuilder and docs/research/cloud-image.md.
 
 from __future__ import annotations
 
+from pathlib import Path
 from typing import Any
 
+import pycdlib
 import yaml
 
 from uqmm.config import VMConfig
@@ -46,3 +48,39 @@ def render_meta_data(cfg: VMConfig) -> str:
         "local-hostname": cfg.effective_hostname(),
     }
     return yaml.safe_dump(body, sort_keys=False, default_flow_style=False)
+
+
+def build_seed_iso(user_data: str, meta_data: str, out: Path) -> None:
+    """Write a NoCloud cidata ISO containing user-data + meta-data to `out`.
+
+    Volume identifier is lowercase `cidata` per the 2025 cloud-init
+    deprecation of uppercase variants — see docs/design/toolchain.md
+    gotcha #2.
+    """
+    # ISO9660 level 1 limits names to 8.3, so the lower layer uses 8.3
+    # placeholders; cloud-init reads the Joliet (long-filename) layer, which
+    # exposes the canonical `user-data` / `meta-data` names.
+    iso = pycdlib.PyCdlib()
+    iso.new(joliet=3, vol_ident="cidata")
+    try:
+        for name, iso_basename, content in (
+            ("user-data", "USERDATA", user_data),
+            ("meta-data", "METADATA", meta_data),
+        ):
+            data = content.encode("utf-8")
+            iso.add_fp(
+                _bytes_io(data),
+                len(data),
+                iso_path=f"/{iso_basename}.;1",
+                joliet_path=f"/{name}",
+            )
+        iso.write(str(out))
+    finally:
+        iso.close()
+
+
+def _bytes_io(data: bytes) -> Any:
+    """Return a fresh BytesIO for `data` (pycdlib rewinds the stream itself)."""
+    import io
+
+    return io.BytesIO(data)
