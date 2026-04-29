@@ -98,13 +98,14 @@ Statuses: **planned** — written into a phase doc; **in-progress** — actively
 | R5 | fixed | [01-qol/phase-4](../implementation/01-qol/phase-4-rerunnable-create.md) | `creating` state + state-aware retry + flock |
 | R6 | fixed | [01-qol/phase-4](../implementation/01-qol/phase-4-rerunnable-create.md) | R5's flock catches the concurrent-create race |
 | R14 | fixed | [01-qol/phase-4](../implementation/01-qol/phase-4-rerunnable-create.md) | Idempotent success when config matches |
-| R10 | planned | [01-qol/phase-5](../implementation/01-qol/phase-5-alpine-resume.md) | Resume Alpine install on retry |
-| R11 | planned | [01-qol/phase-5](../implementation/01-qol/phase-5-alpine-resume.md) | "installed" checkpoint marker |
-| R12 | planned | [01-qol/phase-5](../implementation/01-qol/phase-5-alpine-resume.md) | Re-attempt runtime relaunch + SSH wait |
+| R10 | fixed | [01-qol/phase-5](../implementation/01-qol/phase-5-alpine-resume.md) | Resume Alpine install on retry |
+| R11 | fixed | [01-qol/phase-5](../implementation/01-qol/phase-5-alpine-resume.md) | "installed" checkpoint marker |
+| R12 | fixed | [01-qol/phase-5](../implementation/01-qol/phase-5-alpine-resume.md) | Re-attempt runtime relaunch + SSH wait |
 | R2, R9 | deferred | — | Hard-crash safety; needs durable creating-state + repair command |
 | R4, R7, R8, I11 | deferred | — | Port allocation TOCTOU; revisit if multi-VM workflows hit it often |
-| R13 | deferred | — | Surfaces as SSH timeout; C6 makes it fast-fail but not automatic retry |
-| R15, R16 | deferred | — | Seed regeneration + instance-id rotation; revisit after R14/R5 land |
+| R13 | deferred | — | Cloud-image guest reboot during first boot still surfaces as SSH timeout; C6 makes it fast-fail but no auto-retry yet |
+| R15 | deferred | — | Seed regeneration for created VMs addressed for failed state via phases 4+5; for the created case it remains deferred (= P12 update command) |
+| R16 | deferred | — | Instance-id rotation for cloud-image; no change in this pass |
 | C1, C2 | deferred | — | lock doesn't block `stop`/`delete` during create; separate solution needed |
 | C3, C4, C7, C11 | deferred | — | Lifecycle race polish |
 | I2, I3, I4, I5, I6, I7, I13, I14 | deferred | — | Validation polish; nice-to-have once core retry UX lands |

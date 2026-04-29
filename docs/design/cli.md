@@ -191,6 +191,21 @@ If no `--key` is passed, uqmm tries `~/.ssh/id_ed25519.pub`, then `~/.ssh/id_rsa
 
 Disk-affecting fields (prevent seed-only resume): `os`, `version`, `image`, `disk_size_gb`.
 
+### Alpine resume sub-state (checkpoint markers)
+
+For Alpine (`os == "alpine"`), the resume path inspects marker files in `vm_dir/` to decide where to pick up:
+
+| Markers present | Seed fields changed? | Action |
+|---|---|---|
+| `state.installed` | no | Skip install entirely; relaunch runtime QEMU + wait SSH |
+| `state.installed` | yes (keys/user/hostname) | Refuse: setup-alpine baked old credentials into disk; hint `delete` |
+| `state.seeded` only | any | Regenerate `answers` via `rebuild_seed()` (reuses disk); run install QEMU |
+| (none) | — | Full build: new disk + answers; full install |
+
+Both markers are removed when `state = "created"` is saved. They survive failures so retries skip completed work without re-running setup-alpine on an already-installed disk.
+
+See `docs/design/config.md § AlpineSeedBuilder § Checkpoint markers` for the full table and limitation notes.
+
 ### `uqmm start` on a failed VM
 
 `start` refuses if `state == "failed"`. Use `uqmm create <name>` (resume) or `uqmm delete <name> && uqmm create <name>` to recover.

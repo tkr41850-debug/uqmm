@@ -88,6 +88,28 @@ class SeedBuilder(Protocol):
 
 No ISO rebuild. The custom-ISO/apkovl approach ([alpine-unattended.md](../research/alpine-unattended.md)) remains available as a fallback for offline or stricter-reproducibility scenarios.
 
+#### Checkpoint markers and resume routing
+
+Alpine create touches two marker files in `vm_dir/` to enable fine-grained resume after failure:
+
+| Marker | Written when | Means |
+|---|---|---|
+| `state.seeded` | After `build_disk` + `render_answers` succeed | Disk is blank; answers exist; no install attempted |
+| `state.installed` | After installer QEMU exits cleanly (guest triggered reboot) | OS is on disk; runtime relaunch has not happened yet |
+
+Both markers are removed when `state = "created"` is written to `config.json`. They are kept on failure so the next `create` retry can skip already-completed work.
+
+Resume decision table (entered when `state = "failed"` or stale `"creating"`):
+
+| Markers present | Action |
+|---|---|
+| `state.installed` — seed fields (keys/user/hostname) unchanged | Skip install entirely; relaunch runtime and wait SSH |
+| `state.installed` — seed fields changed | Refuse with hint: setup-alpine has baked the old credentials into the disk; use `delete` to start fresh |
+| `state.seeded` only | Reuse disk; regenerate `answers` from current args via `rebuild_seed()`; re-run install QEMU |
+| (none) | Full `build()`: new disk + new answers; full install |
+
+**Seed-after-install limitation**: once setup-alpine has run, the user account, SSH keys, and hostname are baked into the disk image. Changing `--key`, `--user`, or `--hostname` after a successful install (or after `state.installed` is written) requires `uqmm delete` + recreate. This is the Alpine analog of cloud-image's R16 (stable instance-id). The `update` command (P12) would be the long-term solution.
+
 ### `CloudImageBuilder` (Debian + Ubuntu, unified)
 
 - Cloud image (`debian-13-genericcloud-amd64.qcow2` / `noble-server-cloudimg-amd64.img`) downloaded to cache and qcow2-rebased to `vm_dir/disk.qcow2`, resized to `disk_size_gb`.
