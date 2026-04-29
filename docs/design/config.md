@@ -28,6 +28,10 @@ class VMConfig:
     user: str = "uqmm"                         # SSH login name (overrides cloud-image defaults)
     ssh_authorized_keys: list[str] = field(default_factory=list)
     hostname: str | None = None                # None = use name
+
+    # Persisted provisioning outcome (runtime states like "running" are derived
+    # at probe time — see cli.md § Status discovery)
+    state: Literal["created", "failed"] = "created"
 ```
 
 Once `create` resolves a port, it's recorded in `config.json` and reused on every subsequent `start` so any `~/.ssh/config` aliases stay valid. `delete` frees it.
