@@ -11,7 +11,7 @@ Reference docs for building **uqmm**: a Python CLI QEMU machine manager that pro
 
 ## Topics
 
-- [Alpine unattended install](alpine-unattended.md) — answer file format, apkovl overlay, custom ISO build.
+- [Alpine unattended install](alpine-unattended.md) — answer file format, stock-ISO + serial pexpect (recommended), apkovl/custom-ISO fallback.
 - [Ubuntu autoinstall](ubuntu-autoinstall.md) — cloud-init NoCloud, CIDATA seed ISO, autoinstall cmdline workaround.
 - [QEMU control](qemu-control.md) — QMP socket, `qemu.qmp` Python client, lifecycle commands, serial console wiring.
 - [TCG + SLiRP](tcg-slirp.md) — TCG tuning, CPU feature support under emulation, SLiRP networking gotchas.
@@ -22,7 +22,7 @@ Reference docs for building **uqmm**: a Python CLI QEMU machine manager that pro
 
 | Blocker | Answer |
 |---|---|
-| No-VNC install for Alpine | Custom ISO with embedded apkovl that runs `setup-alpine -ef` via OpenRC `local` service |
+| No-VNC install for Alpine | Stock ISO + serial pexpect: wait at `localhost login:`, type `root`, fetch answers via `wget`, run `setup-alpine -ef`. Custom-ISO/apkovl is a fallback. |
 | No-VNC install for Ubuntu | CIDATA seed ISO + `-kernel`/`-initrd` extracted from live-server ISO + `-append "autoinstall ..."` |
 | Reboot/CD-eject handling | `-no-reboot` + watch QMP `SHUTDOWN` event + relaunch without install drive |
 

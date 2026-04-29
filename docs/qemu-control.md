@@ -128,15 +128,49 @@ Three signals, ordered by reliability:
 
 ## Serial console wiring
 
-| Flag | When to use |
-|---|---|
-| `-serial file:install.log` | Simplest, append-only. Tail from Python. |
-| `-serial unix:/tmp/serial.sock,server=on,wait=off` | Bidirectional. Both read AND inject input (e.g. press Enter at syslinux prompt). Recommended for any interactive bootloader step. |
-| `-serial mon:stdio` | Multiplex serial with HMP monitor on stdin/stdout. Good for manual debugging, not automation. |
+QEMU's serial chardev is fully bidirectional — host writes go to guest `/dev/ttyS0`, guest writes come back. **This is the text equivalent of VNC** and is what makes stock-ISO unattended installs feasible (see [Alpine unattended install](alpine-unattended.md)).
 
-**Alpine virt ISO** ships with `console=tty0 console=ttyS0,115200` on kernel cmdline → full boot output on ttyS0 by default.
+### Backend options
 
-**Ubuntu live-server** does NOT route to ttyS0 by default. Add `console=ttyS0,115200n8` to kernel cmdline (via `-kernel`/`-initrd`/`-append`) for serial-driven observation.
+| Flag | Direction | When to use |
+|---|---|---|
+| `-serial file:install.log` | output only | Simplest, append-only. Tail from Python for passive observation. |
+| `-serial unix:/tmp/serial.sock,server=on,wait=on,reconnect-ms=1000` | bidirectional | Both read AND inject input. **Recommended for serial-driven installs.** |
+| `-serial pty` | bidirectional | QEMU allocates a pty and prints its path on stderr. `pexpect.spawn(...)` works directly. |
+| `-serial mon:stdio` | bidirectional | Multiplex serial with HMP monitor on stdin/stdout. Manual debugging only. |
+
+### Connect-before-boot — `wait=on,reconnect-ms`
+
+`server=on,wait=on` blocks QEMU launch until a client connects to the socket — **use this for install scripts** so the Python control process doesn't miss bootloader output. Spawn QEMU; immediately connect from Python; QEMU then proceeds with kernel boot.
+
+`reconnect-ms=1000` keeps the chardev alive if the host process drops. Without it, the guest blocks on the next write to ttyS0 once kernel buffers fill — survivable for short installs, fatal for long ones. **Always set `reconnect-ms`** on long-running installs.
+
+### pexpect over Unix socket
+
+Use `pexpect.fdpexpect.fdspawn` on a connected `AF_UNIX` socket:
+
+```python
+import socket
+import pexpect.fdpexpect
+
+s = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+s.connect("/tmp/serial.sock")
+c = pexpect.fdpexpect.fdspawn(s, timeout=120, encoding="utf-8")
+
+c.expect("localhost login: ")
+c.sendline("root")
+```
+
+Alternatively, bridge unix-socket → pty with `socat UNIX-CONNECT:/tmp/serial.sock,rawer PTY,link=/tmp/serial.pty` and use plain `pexpect.spawn` on the pty. Reference: [pexpect SocketSpawn / fdpexpect](https://pexpect.readthedocs.io/en/latest/api/socket_pexpect.html).
+
+### Gotchas
+
+- **`child.delaybeforesend = 0.05`** — avoids racing the guest's line discipline on long pasted commands.
+- **`stty cols 200`** as the first command after login — disarms BusyBox getty's default 80-col wrap that can break regex matching.
+- **Anchor regex on stable substrings** (`r":~# "`, `r"login: "`) — not full lines.
+- **Wrap each `expect()` with a panic-grep alternation** (`Kernel panic|Call Trace|exception`) — crashes fail loudly instead of hanging.
+- **Alpine virt ISO** ships with `console=tty0 console=ttyS0,115200` on its syslinux cmdline → full boot output on ttyS0 by default.
+- **Ubuntu live-server** does NOT route to ttyS0 by default. Add `console=ttyS0,115200n8` to kernel cmdline (via `-kernel`/`-initrd`/`-append`) for serial-driven observation.
 
 ## Sources
 
@@ -146,3 +180,5 @@ Three signals, ordered by reliability:
 - [qemu.qmp on PyPI](https://pypi.org/project/qemu.qmp/)
 - [python-qemu-qmp docs](https://qemu.readthedocs.io/projects/python-qemu-qmp/en/latest/)
 - [python-qemu-qmp source](https://gitlab.com/qemu-project/python-qemu-qmp)
+- [pexpect SocketSpawn / fdpexpect docs](https://pexpect.readthedocs.io/en/latest/api/socket_pexpect.html)
+- [QEMU manpage — `-serial`, `-chardev`](https://qemu.readthedocs.io/en/master/system/qemu-manpage.html)

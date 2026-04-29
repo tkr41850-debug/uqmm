@@ -20,7 +20,7 @@ Goal: a single `VMConfig` shape that drives unattended install on both Alpine an
 | Storage layout DSL | `setup-disk` flags (`DISKOPTS="-m sys -s 0 /dev/vda"`) | Subiquity `storage:` graph or `layout: { name: direct\|lvm }` |
 | Package manager | `apk` | `apt` |
 | Repo selection | `APKREPOSOPTS` | `apt:` block in autoinstall |
-| Delivery vehicle | apkovl tarball injected into ISO | CIDATA seed ISO + cmdline `autoinstall` |
+| Delivery vehicle | Stock ISO + serial pexpect (HTTP-served answers); apkovl tarball as fallback | CIDATA seed ISO + cmdline `autoinstall` |
 | Bootloader hook | `setup-disk` `BOOTLOADER` env var | Subiquity grub config |
 | Auto-reboot at end? | No — apkovl script must `reboot` | Yes |
 | Default ttyS0? | Yes (alpine-virt cmdline) | No (must add `console=ttyS0,115200n8`) |
@@ -76,13 +76,15 @@ class SeedBuilder(Protocol):
     def build(self, cfg: VMConfig, workdir: Path) -> InstallArtifacts: ...
 ```
 
-### `AlpineSeedBuilder` produces
+### `AlpineSeedBuilder` produces (recommended path: stock ISO + serial pexpect)
 
 - `answers` file (from `VMConfig` fields → `KEYMAPOPTS`/`HOSTNAMEOPTS`/etc.)
-- `localhost.apkovl.tar.gz` containing answers + autorun script
-- Custom ISO via `xorriso -map ... -boot_image any replay`
-- `qemu_install_args`: `-cdrom custom.iso -drive file=disk.qcow2,if=virtio -no-reboot`
+- A pexpect drive script (typing `wget`, `setup-alpine -ef`, root password, `reboot`).
+- A local HTTP server serving the answers file at install time.
+- `qemu_install_args`: `-cdrom alpine-virt-VER.iso -drive file=disk.qcow2,if=virtio -serial unix:SERIAL_SOCK,server=on,wait=on,reconnect-ms=1000 -no-reboot`
 - `qemu_runtime_args`: `-drive file=disk.qcow2,if=virtio` (no CD)
+
+No ISO rebuild. The custom-ISO/apkovl approach ([alpine-unattended.md](alpine-unattended.md)) remains available as a fallback for offline-only or stricter reproducibility scenarios.
 
 ### `UbuntuSeedBuilder` produces
 
