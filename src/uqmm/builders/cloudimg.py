@@ -145,6 +145,10 @@ class CloudImageBuilder:
 
 
 def _qemu_args(cfg: VMConfig, vm_dir: Path, disk: Path, seed: Path) -> list[str]:
+    # -no-reboot: a guest reboot during create is almost always cloud-init
+    # tripping over its own configuration. Letting QEMU exit on the reboot
+    # turns that into a fast-fail (caller sees process exit; SSH-wait
+    # surfaces a clear timeout) rather than a silent loop.
     assert cfg.ssh_port is not None
     return [
         "qemu-system-x86_64",
@@ -157,6 +161,7 @@ def _qemu_args(cfg: VMConfig, vm_dir: Path, disk: Path, seed: Path) -> list[str]
         "-m",
         str(cfg.memory_mb),
         "-nographic",
+        "-no-reboot",
         "-drive",
         f"file={disk},if=virtio",
         "-drive",

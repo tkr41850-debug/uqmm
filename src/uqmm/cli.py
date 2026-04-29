@@ -6,6 +6,7 @@ See docs/design/cli.md for the command contract.
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import shutil
 import sys
 from asyncio.subprocess import Process
@@ -89,6 +90,7 @@ def create(
 
 async def _create_cloudimg(cfg: VMConfig, vm_dir: Path) -> int:
     """Drive the cloud-image branch: build, launch, wait SSH, persist."""
+    proc: Process | None = None
     try:
         artifacts = CloudImageBuilder().build(cfg, vm_dir)
         proc = await _launch_qemu(
@@ -96,16 +98,38 @@ async def _create_cloudimg(cfg: VMConfig, vm_dir: Path) -> int:
             pidfile=vm_dir / "qemu.pid",
             stderr_log=vm_dir / "install.log",
         )
-        del proc
         assert cfg.ssh_port is not None  # guaranteed by allocator
         await _wait_ssh_ready("127.0.0.1", cfg.ssh_port)
     except BaseException:
+        # Reap QEMU so a "failed" state doesn't leave a live qemu-system-* and
+        # a stale qemu.pid pointing at it. SIGTERM first; if the process is
+        # already gone the kill_proc helper is a no-op.
+        if proc is not None:
+            await _kill_proc(proc)
+        (vm_dir / "qemu.pid").unlink(missing_ok=True)
         cfg.state = "failed"
         cfg.save(vm_dir / "config.json")
         raise
     cfg.save(vm_dir / "config.json")
     print(f"{cfg.name} ready: ssh -p {cfg.ssh_port} {cfg.user}@127.0.0.1")
     return 0
+
+
+async def _kill_proc(proc: Process) -> None:
+    """SIGTERM and wait briefly; escalate to SIGKILL if still alive."""
+    if proc.returncode is not None:
+        return
+    try:
+        proc.terminate()
+    except ProcessLookupError:
+        return
+    try:
+        async with asyncio.timeout(5.0):
+            _ = await proc.wait()
+    except TimeoutError:
+        with contextlib.suppress(ProcessLookupError):
+            proc.kill()
+        _ = await proc.wait()
 
 
 async def _launch_qemu(args: list[str], pidfile: Path, stderr_log: Path) -> Process:

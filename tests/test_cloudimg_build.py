@@ -69,6 +69,9 @@ def test_build_qemu_args_contain_required_pieces(tmp_path: Path) -> None:
     args = " ".join(artifacts.qemu_install_args)
     assert "qemu-system-x86_64" in artifacts.qemu_install_args[0]
     assert "-nographic" in artifacts.qemu_install_args
+    # -no-reboot: a guest-triggered reboot during create indicates failure;
+    # exit the QEMU process so the caller sees it instead of looping.
+    assert "-no-reboot" in artifacts.qemu_install_args
     assert "-cpu" in artifacts.qemu_install_args
     # virtio disks: cloud image base + cidata seed
     assert f"file={vm_dir / 'disk.qcow2'},if=virtio" in args

@@ -101,11 +101,16 @@ def test_create_marks_failed_on_ssh_timeout(
     monkeypatch.setenv("XDG_CACHE_HOME", str(tmp_path / "cache"))
     art = InstallArtifacts(qemu_install_args=[], qemu_runtime_args=[])
 
+    fake_proc = MagicMock(pid=4242, returncode=None)
+    fake_proc.terminate = MagicMock()
+    fake_proc.kill = MagicMock()
+    fake_proc.wait = AsyncMock(return_value=0)
+
     builder_p = patch(
         "uqmm.cli.CloudImageBuilder",
         return_value=MagicMock(build=MagicMock(return_value=art)),
     )
-    launch_p = patch("uqmm.cli._launch_qemu", new=AsyncMock(return_value=MagicMock(pid=4242)))
+    launch_p = patch("uqmm.cli._launch_qemu", new=AsyncMock(return_value=fake_proc))
     ssh_p = patch(
         "uqmm.cli._wait_ssh_ready",
         new=AsyncMock(side_effect=TimeoutError("no banner")),
@@ -128,6 +133,10 @@ def test_create_marks_failed_on_ssh_timeout(
     cfg_path = tmp_path / "data" / "uqmm" / "vms" / "deb13" / "config.json"
     assert cfg_path.exists()
     assert '"failed"' in cfg_path.read_text()
+    # QEMU must be reaped — no stale qemu.pid, terminate() was called.
+    fake_proc.terminate.assert_called_once()
+    pidfile = tmp_path / "data" / "uqmm" / "vms" / "deb13" / "qemu.pid"
+    assert not pidfile.exists()
 
 
 def test_create_allocates_ssh_port_when_omitted(

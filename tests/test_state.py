@@ -115,9 +115,7 @@ def test_read_occupied_ports_skips_corrupt_config(
     bad = vms / "bad"
     good.mkdir(parents=True)
     bad.mkdir(parents=True)
-    VMConfig(name="good", os="alpine", version="3.21", ssh_port=22055).save(
-        good / "config.json"
-    )
+    VMConfig(name="good", os="alpine", version="3.21", ssh_port=22055).save(good / "config.json")
     (bad / "config.json").write_text("{ this is not valid json")
     # Corrupt config is silently skipped — port allocator stays useful.
     assert state.read_occupied_ports() == {22055}
