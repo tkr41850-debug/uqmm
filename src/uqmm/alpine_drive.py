@@ -24,9 +24,6 @@ class _Spawn(Protocol):
     def sendline(self, line: str) -> None: ...
 
 
-# Disposable: setup-alpine demands a value, but key-based SSH is the real auth path.
-_DEFAULT_ROOT_PASSWORD = "uqmm-disposable"
-
 # Strings that mean "the install crashed; don't keep waiting for the prompt."
 # Per docs/research/alpine-unattended.md, alternate every expect with these so a
 # panic fails loudly instead of hanging until the per-step timeout.
@@ -47,7 +44,6 @@ class PanicDetected(RuntimeError):
 def drive_install(
     spawn: _Spawn,
     answers_url: str,
-    root_password: str | None = None,
 ) -> None:
     """Run setup-alpine -ef <answers> and trigger reboot.
 
@@ -56,13 +52,15 @@ def drive_install(
     2. Widen the terminal so wrapped output doesn't break our regex anchors.
     3. Bring up eth0 + DHCP so wget can reach the host's answer-file server.
     4. wget the answer file and invoke setup-alpine -ef.
-    5. Type the root password twice (setup-alpine asks even with -f).
-    6. Wait for the post-install shell prompt; reboot.
+    5. Wait for an explicit success marker, then the post-install shell prompt.
+    6. Reboot.
+
+    `setup-alpine -e` means empty root password, so there is no password prompt
+    to answer in this flow.
 
     QEMU's `-no-reboot` makes the reboot trigger process exit; the caller
     sees that via QMP SHUTDOWN or process.wait().
     """
-    pw = root_password or _DEFAULT_ROOT_PASSWORD
 
     # 1. live-ISO login (root, no password)
     _expect_or_panic(spawn, "login: ", timeout=180)
@@ -81,14 +79,12 @@ def drive_install(
     spawn.sendline(
         f"wget -O /tmp/answers {answers_url} && "
         "export ERASE_DISKS=/dev/vda && "
-        "setup-alpine -ef /tmp/answers"
+        "setup-alpine -ef /tmp/answers && echo UQMM_INSTALL_DONE"
     )
-    # 5. setup-alpine asks for new root password twice, even with -f.
-    _expect_or_panic(spawn, "New password: ", timeout=300)
-    spawn.sendline(pw)
-    _expect_or_panic(spawn, "Retype password: ", timeout=10)
-    spawn.sendline(pw)
 
-    # 6. wait for installer completion; the shell prompt returns when done.
-    _expect_or_panic(spawn, "# ", timeout=900)
+    # 5. confirm installer success before trusting the shell prompt.
+    _expect_or_panic(spawn, "UQMM_INSTALL_DONE", timeout=900)
+    _expect_or_panic(spawn, "# ", timeout=30)
+
+    # 6. reboot into the installed system.
     spawn.sendline("reboot")

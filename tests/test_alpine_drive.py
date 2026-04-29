@@ -6,17 +6,11 @@ from unittest.mock import MagicMock
 
 import pytest
 
-from uqmm.alpine_drive import drive_install
+from uqmm.alpine_drive import _PANIC_PATTERNS, drive_install
 
 
 class FakeSpawn:
-    """Minimal fake of pexpect.SocketSpawn for the drive script.
-
-    Records sendline calls and serves expect() against a queue of patterns.
-    Each expect call pops the head of `expect_queue` and checks the next
-    `pattern` arg matches it as a regex; if not, it raises so the test fails
-    visibly.
-    """
+    """Minimal fake of pexpect.SocketSpawn for the drive script."""
 
     def __init__(self, expect_queue: Iterable[Any]) -> None:
         from collections import deque
@@ -34,6 +28,10 @@ class FakeSpawn:
             from pexpect import TIMEOUT
 
             raise TIMEOUT(f"forced timeout on expect({pattern!r})")
+        if isinstance(pattern, list):
+            assert pattern == [head, *_PANIC_PATTERNS]
+            return 0
+        assert pattern == head
         return 0
 
     def sendline(self, line: str) -> None:
@@ -47,26 +45,24 @@ def test_drive_install_happy_path() -> None:
     spawn = FakeSpawn(
         expect_queue=[
             "login: ",
-            "# ",  # after sendline("root")
-            "# ",  # after stty cols
-            "# ",  # after udhcpc
-            "# ",  # after wget+setup-alpine launches
-            "New password: ",
-            "Retype password: ",
-            "# ",  # install completes
+            "# ",
+            "# ",
+            "# ",
+            "UQMM_INSTALL_DONE",
+            "# ",
         ]
     )
-    drive_install(spawn, answers_url="http://10.0.2.2:9999/answers", root_password="hunter2")
+    drive_install(spawn, answers_url="http://10.0.2.2:9999/answers")
 
-    # Order matters — verify the script types the right things in the right order.
     sent = spawn.sent
     assert sent[0] == "root"
     assert sent[1].startswith("stty cols")
     assert "udhcpc" in sent[2]
-    assert "wget" in sent[3] and "setup-alpine" in sent[3] and "ERASE_DISKS=/dev/vda" in sent[3]
-    assert sent[4] == "hunter2"
-    assert sent[5] == "hunter2"
-    assert sent[6] == "reboot"
+    assert sent[3].startswith("wget -O /tmp/answers http://10.0.2.2:9999/answers && ")
+    assert "setup-alpine -ef /tmp/answers" in sent[3]
+    assert "ERASE_DISKS=/dev/vda" in sent[3]
+    assert "echo UQMM_INSTALL_DONE" in sent[3]
+    assert sent[4] == "reboot"
 
 
 def test_drive_install_raises_panic_when_kernel_panic_on_console() -> None:
@@ -88,23 +84,25 @@ def test_drive_install_raises_on_unexpected_timeout() -> None:
         drive_install(spawn, answers_url="http://10.0.2.2:9999/answers")
 
 
-def test_drive_install_default_password_is_disposable() -> None:
+def test_drive_install_does_not_send_password_prompts() -> None:
     spawn = FakeSpawn(
         expect_queue=[
             "login: ",
             "# ",
             "# ",
             "# ",
-            "# ",
-            "New password: ",
-            "Retype password: ",
+            "UQMM_INSTALL_DONE",
             "# ",
         ]
     )
     drive_install(spawn, answers_url="http://10.0.2.2:9999/answers")
-    # Default password is the same string twice, but not empty.
-    assert spawn.sent[4] == spawn.sent[5]
-    assert spawn.sent[4] != ""
+    assert spawn.sent == [
+        "root",
+        "stty cols 200",
+        "ifconfig eth0 up && udhcpc -i eth0",
+        "wget -O /tmp/answers http://10.0.2.2:9999/answers && export ERASE_DISKS=/dev/vda && setup-alpine -ef /tmp/answers && echo UQMM_INSTALL_DONE",
+        "reboot",
+    ]
 
 
 def test_drive_install_uses_provided_url() -> None:
@@ -114,9 +112,7 @@ def test_drive_install_uses_provided_url() -> None:
             "# ",
             "# ",
             "# ",
-            "# ",
-            "New password: ",
-            "Retype password: ",
+            "UQMM_INSTALL_DONE",
             "# ",
         ]
     )
@@ -126,17 +122,13 @@ def test_drive_install_uses_provided_url() -> None:
 
 
 def test_drive_install_does_not_close_spawn() -> None:
-    # The caller (cli) needs the spawn open after the install drive finishes
-    # so it can read final output / decide whether to relaunch.
     spawn = FakeSpawn(
         expect_queue=[
             "login: ",
             "# ",
             "# ",
             "# ",
-            "# ",
-            "New password: ",
-            "Retype password: ",
+            "UQMM_INSTALL_DONE",
             "# ",
         ]
     )
@@ -145,11 +137,9 @@ def test_drive_install_does_not_close_spawn() -> None:
 
 
 def test_drive_install_accepts_real_socket_spawn_protocol() -> None:
-    # Smoke test: the protocol uses .expect / .sendline; nothing else.
-    # If we ever change the contract, this catches it before runtime.
     mock = MagicMock()
     mock.expect = MagicMock(return_value=0)
     mock.sendline = MagicMock()
-    drive_install(mock, answers_url="http://10.0.2.2:1/answers", root_password="x")
+    drive_install(mock, answers_url="http://10.0.2.2:1/answers")
     assert mock.expect.call_count >= 6
-    assert mock.sendline.call_count >= 6
+    assert mock.sendline.call_count >= 5
