@@ -12,7 +12,9 @@ from typing import Any
 import pycdlib
 import yaml
 
+from uqmm.builders.base import InstallArtifacts
 from uqmm.config import VMConfig
+from uqmm.resolve import resolve_image
 
 
 def render_user_data(cfg: VMConfig) -> str:
@@ -116,3 +118,55 @@ def prepare_disk(base: Path, out: Path, size_gb: int) -> None:
         except subprocess.CalledProcessError as e:
             stderr = e.stderr.decode("utf-8", errors="replace") if e.stderr else ""
             raise RuntimeError(f"{cmd[0]} {cmd[1]} failed: {stderr.strip()}") from e
+
+
+class CloudImageBuilder:
+    """Builder for cloud-init-based images (Debian + Ubuntu)."""
+
+    def build(self, cfg: VMConfig, vm_dir: Path) -> InstallArtifacts:
+        if cfg.ssh_port is None:
+            raise ValueError("ssh_port must be resolved before building (CLI allocates)")
+
+        base = resolve_image(cfg)
+        disk = vm_dir / "disk.qcow2"
+        seed = vm_dir / "seed.iso"
+
+        prepare_disk(base, disk, size_gb=cfg.disk_size_gb)
+        build_seed_iso(render_user_data(cfg), render_meta_data(cfg), seed)
+
+        args = _qemu_args(cfg, vm_dir, disk, seed)
+        # Cloud image: no separate install phase. Same args drive the
+        # cloud-init-on-first-boot run and every subsequent boot.
+        return InstallArtifacts(
+            qemu_install_args=args,
+            qemu_runtime_args=args,
+            seed_paths=[disk, seed],
+        )
+
+
+def _qemu_args(cfg: VMConfig, vm_dir: Path, disk: Path, seed: Path) -> list[str]:
+    assert cfg.ssh_port is not None
+    return [
+        "qemu-system-x86_64",
+        "-machine",
+        "q35",
+        "-cpu",
+        "max",
+        "-smp",
+        str(cfg.vcpus),
+        "-m",
+        str(cfg.memory_mb),
+        "-nographic",
+        "-drive",
+        f"file={disk},if=virtio",
+        "-drive",
+        f"file={seed},if=virtio,format=raw,readonly=on",
+        "-netdev",
+        f"user,id=net0,hostfwd=tcp:127.0.0.1:{cfg.ssh_port}-:22",
+        "-device",
+        "virtio-net-pci,netdev=net0",
+        "-qmp",
+        f"unix:{vm_dir / 'qmp.sock'},server=on,wait=off",
+        "-serial",
+        f"unix:{vm_dir / 'serial.sock'},server=on,wait=off",
+    ]
