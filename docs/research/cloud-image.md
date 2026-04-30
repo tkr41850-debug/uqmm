@@ -73,7 +73,7 @@ qemu-system-x86_64 \
     -netdev user,id=n0,hostfwd=tcp::2222-:22 \
     -device virtio-net-pci,netdev=n0 \
     -display none \
-    -serial unix:/tmp/uqmm.sock,server=on,wait=off,reconnect-ms=1000 \
+    -serial unix:/tmp/uqmm.sock,server=on,wait=off \
     -qmp unix:/tmp/qmp.sock,server=on,wait=off
 ```
 

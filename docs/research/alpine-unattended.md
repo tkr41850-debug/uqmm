@@ -50,21 +50,25 @@ If you drop `-e`, `setup-alpine -f` will ask for `New password:` / `Retype passw
 
 Why this works out of the box:
 
-1. Alpine virt ISO already has `console=tty0 console=ttyS0,115200` on its syslinux cmdline ([Enable Serial Console on Boot wiki](https://wiki.alpinelinux.org/wiki/Enable_Serial_Console_on_Boot)) — getty respawns on `ttyS0` after kernel boot.
-2. Live ISO root has **no password** ([Installing Alpine in a virtual machine](https://wiki.alpinelinux.org/wiki/Installing_Alpine_in_a_virtual_machine)).
-3. BusyBox `wget` is built in.
-4. SLiRP DHCPs the guest at 10.0.2.15 with gateway 10.0.2.2 → host's `python3 -m http.server` is reachable.
+1. Live ISO root has **no password** ([Installing Alpine in a virtual machine](https://wiki.alpinelinux.org/wiki/Installing_Alpine_in_a_virtual_machine)).
+2. BusyBox `wget` is built in.
+3. SLiRP DHCPs the guest at 10.0.2.15 with gateway 10.0.2.2 → host's `python3 -m http.server` is reachable.
+
+What does **not** work out of the box: the Alpine virt 3.21 syslinux cmdline does NOT include `console=ttyS0` (the wiki claim is out of date). Booting `-cdrom` alone leaves the serial socket blank. Bypass isolinux by extracting `boot/vmlinuz-virt` and `boot/initramfs-virt` from the ISO with `pycdlib` and pass them directly with `-kernel`/`-initrd`/`-append`. Full details in [gotchas.md § Alpine virt 3.21 syslinux cmdline](../gotchas.md#alpine-virt-321-syslinux-cmdline-does-not-include-consolettys0).
 
 Required QEMU args (in addition to the baseline):
 
 ```
--serial unix:/tmp/uqmm.sock,server=on,wait=on,reconnect-ms=1000
--cdrom alpine-virt-3.21.0-x86_64.iso
--drive file=disk.qcow2,if=virtio
+-serial unix:/tmp/uqmm.sock,server=on,wait=on
+-kernel  /tmp/uqmm-vmlinuz
+-initrd  /tmp/uqmm-initramfs
+-append  "modules=loop,squashfs,sd-mod,usb-storage console=ttyS0,115200"
+-cdrom   alpine-virt-3.21.0-x86_64.iso
+-drive   file=disk.qcow2,if=virtio
 -no-reboot
 ```
 
-`wait=on` blocks QEMU launch until the Python control process connects — no boot output is missed. `reconnect-ms` keeps the chardev alive if the host process drops, so the install doesn't deadlock on a blocked write.
+`wait=on` blocks QEMU launch until the Python control process connects — no boot output is missed. Do **not** add `reconnect-ms=` here — QEMU 11.0+ rejects it on server-listen sockets ([gotchas.md § reconnect-ms](../gotchas.md#reconnect-ms-is-rejected-by-qemu-110-on-server-listen-sockets)).
 
 Pexpect drive script (~30 lines), modeled on the [Packer installation](https://wiki.alpinelinux.org/wiki/Packer_installation) wiki:
 

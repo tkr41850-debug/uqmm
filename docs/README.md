@@ -15,7 +15,7 @@
 
 | OS family | Path | Time to SSH-ready (TCG) |
 |---|---|---|
-| Alpine | Stock ISO + serial pexpect driving `setup-alpine -ef` over the console | 2-4 min |
+| Alpine | Stock ISO + serial pexpect driving `setup-alpine -ef` over the console | ~25 min (live boot + apk install + first-boot sshd-keygen all on emulated CPU — see [gotchas.md](gotchas.md#realistic-install-time-is-25-min-not-2-4-min)) |
 | Debian + Ubuntu | Cloud image qcow2 + NoCloud `cidata` seed | 30-60 s |
 
 ## Working baseline (current manual state)
@@ -28,7 +28,7 @@ nice -n 5 qemu-system-x86_64 \
     -netdev user,id=mynet0,hostfwd=tcp::5901-:22 \
     -device virtio-net-pci,netdev=mynet0 \
     -display none \
-    -serial unix:/tmp/serial.sock,server=on,wait=on,reconnect-ms=1000 \
+    -serial unix:/tmp/serial.sock,server=on,wait=on \
     -qmp unix:/tmp/qmp.sock,server=on,wait=off \
     -no-reboot
 ```

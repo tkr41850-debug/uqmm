@@ -51,11 +51,11 @@ Once `create` resolves a port, it's recorded in `config.json` and reused on ever
 |---|---|---|
 | Source artifact | `alpine-virt-X.Y.Z.iso` (~50 MB) | `*-genericcloud-amd64.qcow2` / `*-server-cloudimg-amd64.img` (~350-700 MB) |
 | Provisioning model | Run installer interactively over serial; install to blank disk | Boot pre-installed image; cloud-init applies seed on first boot |
-| Time to SSH-ready (TCG) | 2-4 min | 30-60 s |
+| Time to SSH-ready (TCG) | ~25 min ([gotchas.md](../gotchas.md#realistic-install-time-is-25-min-not-2-4-min)) | 30-60 s |
 | Storage layout | `setup-disk -m sys -s 0 /dev/vda` | Single partition, auto-grown by `cloud-initramfs-growroot` |
 | Package manager | `apk` | `apt` |
 | Default user (pre-uqmm) | `root`, no password (live ISO) | `debian` / `ubuntu` (preconfigured); uqmm overrides via cloud-config `users:` |
-| Default ttyS0? | Yes (alpine-virt cmdline) | Yes (cloud images preconfigured) |
+| Default ttyS0? | No — alpine-virt 3.21 cmdline lacks `console=ttyS0`; uqmm boots via extracted `-kernel`/`-initrd` ([gotchas.md](../gotchas.md#alpine-virt-321-syslinux-cmdline-does-not-include-consolettys0)) | Yes (cloud images preconfigured) |
 | Seed delivery | answer file via `wget http://10.0.2.2:8000/answers` typed at root prompt | `cidata`-labeled ISO attached as second virtio drive |
 
 The smart abstraction stops at the **high-level intent** and dispatches to per-technique builders for storage and delivery.
@@ -83,7 +83,7 @@ class SeedBuilder(Protocol):
 - `answers` file (from `VMConfig` fields → `KEYMAPOPTS` / `HOSTNAMEOPTS` / `USEROPTS` / `USERSSHKEY` / etc.)
 - A pexpect drive script (typing `wget`, `setup-alpine -ef`, waiting for completion, `reboot`).
 - A local HTTP server serving the answers file at install time.
-- `qemu_install_args`: `-cdrom alpine-virt-VER.iso -drive file=disk.qcow2,if=virtio -serial unix:SERIAL_SOCK,server=on,wait=on,reconnect-ms=1000 -no-reboot`
+- `qemu_install_args`: `-cdrom alpine-virt-VER.iso -drive file=disk.qcow2,if=virtio -serial unix:SERIAL_SOCK,server=on,wait=on -no-reboot` (plus `-kernel`/`-initrd`/`-append` extracted from the ISO — see [gotchas.md](../gotchas.md#alpine-virt-321-syslinux-cmdline-does-not-include-consolettys0))
 - `qemu_runtime_args`: `-drive file=disk.qcow2,if=virtio` (no CD)
 
 No ISO rebuild. The custom-ISO/apkovl approach ([alpine-unattended.md](../research/alpine-unattended.md)) remains available as a fallback for offline or stricter-reproducibility scenarios.

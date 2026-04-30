@@ -135,15 +135,15 @@ QEMU's serial chardev is fully bidirectional — host writes go to guest `/dev/t
 | Flag | Direction | When to use |
 |---|---|---|
 | `-serial file:install.log` | output only | Simplest, append-only. Tail from Python for passive observation. |
-| `-serial unix:/tmp/serial.sock,server=on,wait=on,reconnect-ms=1000` | bidirectional | Both read AND inject input. **Recommended for serial-driven installs.** |
+| `-serial unix:/tmp/serial.sock,server=on,wait=on` | bidirectional | Both read AND inject input. **Recommended for serial-driven installs.** |
 | `-serial pty` | bidirectional | QEMU allocates a pty and prints its path on stderr. `pexpect.spawn(...)` works directly. |
 | `-serial mon:stdio` | bidirectional | Multiplex serial with HMP monitor on stdin/stdout. Manual debugging only. |
 
-### Connect-before-boot — `wait=on,reconnect-ms`
+### Connect-before-boot — `wait=on`
 
 `server=on,wait=on` blocks QEMU launch until a client connects to the socket — **use this for install scripts** so the Python control process doesn't miss bootloader output. Spawn QEMU; immediately connect from Python; QEMU then proceeds with kernel boot.
 
-`reconnect-ms=1000` keeps the chardev alive if the host process drops. Without it, the guest blocks on the next write to ttyS0 once kernel buffers fill — survivable for short installs, fatal for long ones. **Always set `reconnect-ms`** on long-running installs.
+Do **not** add `reconnect-ms=` to a server-listen socket — QEMU 11.0+ rejects it (the option only ever applied to client-connect chardevs). See [gotchas.md § reconnect-ms](../gotchas.md#reconnect-ms-is-rejected-by-qemu-110-on-server-listen-sockets).
 
 ### pexpect over Unix socket
 
@@ -169,7 +169,7 @@ Alternatively, bridge unix-socket → pty with `socat UNIX-CONNECT:/tmp/serial.s
 - **`stty cols 200`** as the first command after login — disarms BusyBox getty's default 80-col wrap that can break regex matching.
 - **Anchor regex on stable substrings** (`r":~# "`, `r"login: "`) — not full lines.
 - **Wrap each `expect()` with a panic-grep alternation** (`Kernel panic|Call Trace|exception`) — crashes fail loudly instead of hanging.
-- **Alpine virt ISO** ships with `console=tty0 console=ttyS0,115200` on its syslinux cmdline → full boot output on ttyS0 by default.
+- **Alpine virt ISO (3.21)** does **not** ship `console=ttyS0` on its syslinux cmdline — the wiki claim is out of date. Boot via `-kernel`/`-initrd` extracted from the ISO with `-append "modules=loop,squashfs,sd-mod,usb-storage console=ttyS0,115200"`. See [gotchas.md § Alpine virt 3.21 syslinux cmdline](../gotchas.md#alpine-virt-321-syslinux-cmdline-does-not-include-consolettys0).
 - **Ubuntu live-server** does NOT route to ttyS0 by default. Add `console=ttyS0,115200n8` to kernel cmdline (via `-kernel`/`-initrd`/`-append`) for serial-driven observation.
 
 ## Sources

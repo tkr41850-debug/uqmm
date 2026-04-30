@@ -70,7 +70,7 @@ Add to `alpine.py`:
     - `-netdev user,id=net0,hostfwd=tcp:127.0.0.1:<ssh_port>-:22`
     - `-device virtio-net-pci,netdev=net0`
     - `-qmp unix:<vm_dir>/qmp.sock,server=on,wait=off`
-    - `-serial unix:<vm_dir>/serial.sock,server=on,wait=on,reconnect-ms=1000`
+    - `-serial unix:<vm_dir>/serial.sock,server=on,wait=on` (no `reconnect-ms` — rejected by QEMU 11.0+ on server-listen sockets, see [gotchas.md](../../gotchas.md#reconnect-ms-is-rejected-by-qemu-110-on-server-listen-sockets))
   - `qemu_runtime_args`: same minus `-cdrom`/`-boot d`/`-no-reboot`.
 
 **Tests** (`tests/test_alpine_build.py`):
