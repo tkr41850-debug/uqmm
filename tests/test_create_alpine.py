@@ -423,6 +423,28 @@ def test_R11_resume_from_installed_refuses_seed_change(
     assert "baked" in err or "setup-alpine" in err
 
 
+def test_R11_resume_from_installed_clean_error_if_disk_missing(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    monkeypatch.setenv("XDG_DATA_HOME", str(tmp_path / "data"))
+    monkeypatch.setenv("XDG_CACHE_HOME", str(tmp_path / "cache"))
+
+    vm_dir_target = tmp_path / "data" / "uqmm" / "vms" / "al321"
+    vm_dir_target.mkdir(parents=True)
+    (vm_dir_target / "state.installed").touch()
+    # disk intentionally absent
+    _write_failed_cfg(vm_dir_target)
+
+    rc = main(_alpine_args(tmp_path))
+
+    assert rc == 1
+    err = capsys.readouterr().err
+    assert "disk.qcow2" in err or "missing" in err
+    assert '"failed"' in (vm_dir_target / "config.json").read_text()
+
+
 def test_R12_resume_from_installed_retries_ssh_wait(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
@@ -461,6 +483,8 @@ def test_R12_resume_from_installed_retries_ssh_wait(
 
     assert (vm_dir_target / "state.installed").exists()
     assert '"failed"' in (vm_dir_target / "config.json").read_text()
+    # Simulate the disk that the real installer would have written.
+    (vm_dir_target / "disk.qcow2").write_bytes(b"installed")
 
     # Second run: resumes from state.installed — no reinstall.
     second_launch_calls: list[object] = []

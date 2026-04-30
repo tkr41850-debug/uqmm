@@ -385,6 +385,16 @@ async def _resume_alpine(cfg: VMConfig, vm_dir: Path, saved: VMConfig) -> int:
     has_installed = installed_marker.exists()
     has_seeded = seeded_marker.exists()
 
+    if has_installed and not (vm_dir / "disk.qcow2").exists():
+        print(
+            f"state.installed is set but disk.qcow2 is missing; "
+            f"use `uqmm delete {cfg.name} && uqmm create {cfg.name} ...` to start fresh",
+            file=sys.stderr,
+        )
+        cfg.state = "failed"
+        cfg.save(vm_dir / "config.json")
+        return 1
+
     if has_installed and _seed_fields_differ(saved, cfg):
         _print_config_diff(saved, cfg)
         print(
