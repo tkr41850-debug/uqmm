@@ -9,6 +9,7 @@
 - **[implementation/baseline/](implementation/baseline/)** — phased plan for getting from green-field to a working `uqmm create` for both install paths.
 - **[implementation/01-qol/](implementation/01-qol/)** — quality-of-life pass: state I/O robustness, launch correctness, input validation, re-runnable `create`, Alpine install resumability.
 - **[issues/](issues/)** — catalogued user-experience scenarios with verification status and adoption tracking.
+- **[gotchas.md](gotchas.md)** — hard-won findings from running uqmm under TCG + SLiRP that supplement (and in places correct) the upstream wiki guidance.
 
 ## Two paths, three OS targets
 
