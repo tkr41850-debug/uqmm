@@ -19,7 +19,13 @@ _BANNER_PREFIX = b"SSH-"
 async def wait_ready(
     host: str,
     port: int,
-    timeout: float = 300.0,  # noqa: ASYNC109 — explicit timeout matches caller ergonomics
+    # 1200s covers an Alpine FIRST boot under TCG with 1–2 vcpus: sshd's
+    # initial RSA/ECDSA/ED25519 host-key generation is entropy-bound and
+    # the emulator has no /dev/hwrng, so 4096-bit RSA keygen alone can
+    # take 8+ min. Cloud-init guests reach SSH in 30–60s, and Alpine's
+    # second boot also lands under a minute (keys already generated) — so
+    # this is a generous first-boot ceiling, not the typical wait.
+    timeout: float = 1200.0,  # noqa: ASYNC109 — explicit timeout matches caller ergonomics
 ) -> None:
     """Block until `host:port` answers with an SSH banner, or `timeout` elapses.
 
@@ -56,7 +62,7 @@ async def wait_ready_or_proc_exit(
     host: str,
     port: int,
     proc_coro: Coroutine[Any, Any, int],
-    timeout: float = 300.0,  # noqa: ASYNC109 — explicit timeout matches caller ergonomics
+    timeout: float = 1200.0,  # noqa: ASYNC109 — explicit timeout matches caller ergonomics
 ) -> None:
     """Race SSH readiness against process exit.
 

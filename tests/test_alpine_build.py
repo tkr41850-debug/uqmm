@@ -22,6 +22,10 @@ def test_build_creates_disk_and_answers(tmp_path: Path) -> None:
     with (
         patch("uqmm.builders.alpine.resolve_image", return_value=iso),
         patch("uqmm.builders.alpine.build_disk") as mock_disk,
+        patch(
+            "uqmm.builders.alpine.extract_alpine_boot_files",
+            return_value=(tmp_path / "vmlinuz", tmp_path / "initrd"),
+        ),
     ):
         artifacts = AlpineSeedBuilder().build(cfg, vm_dir)
 
@@ -46,6 +50,10 @@ def test_install_args_have_cdrom_and_no_reboot(tmp_path: Path) -> None:
     with (
         patch("uqmm.builders.alpine.resolve_image", return_value=iso),
         patch("uqmm.builders.alpine.build_disk"),
+        patch(
+            "uqmm.builders.alpine.extract_alpine_boot_files",
+            return_value=(tmp_path / "vmlinuz", tmp_path / "initrd"),
+        ),
     ):
         artifacts = AlpineSeedBuilder().build(cfg, vm_dir)
 
@@ -54,14 +62,22 @@ def test_install_args_have_cdrom_and_no_reboot(tmp_path: Path) -> None:
     assert "-cdrom" in install
     assert str(iso) in install
     assert "-no-reboot" in install
+    # We bypass isolinux with -kernel/-initrd to inject console=ttyS0,
+    # which the ISO's syslinux.cfg omits.
+    assert "-kernel" in install
+    assert "-initrd" in install
+    append = install[install.index("-append") + 1]
+    assert "console=ttyS0,115200" in append
     # serial wait=on so the driver always connects before boot output starts.
+    # reconnect-ms is a client-side option; QEMU 11.0+ rejects it on server sockets.
     serial_arg = install[install.index("-serial") + 1]
     assert "wait=on" in serial_arg
-    assert "reconnect-ms=1000" in serial_arg
+    assert "reconnect-ms" not in serial_arg
 
     # Runtime sheds CD + no-reboot; serial still attached but wait=off.
     assert "-cdrom" not in runtime
     assert "-no-reboot" not in runtime
+    assert "-kernel" not in runtime  # installed system uses its own bootloader
     runtime_serial = runtime[runtime.index("-serial") + 1]
     assert "wait=off" in runtime_serial
 
@@ -83,6 +99,10 @@ def test_alpine_bumps_resources_below_threshold(tmp_path: Path) -> None:
     with (
         patch("uqmm.builders.alpine.resolve_image", return_value=iso),
         patch("uqmm.builders.alpine.build_disk"),
+        patch(
+            "uqmm.builders.alpine.extract_alpine_boot_files",
+            return_value=(tmp_path / "vmlinuz", tmp_path / "initrd"),
+        ),
     ):
         artifacts = AlpineSeedBuilder().build(cfg, vm_dir)
 
@@ -113,6 +133,10 @@ def test_alpine_keeps_higher_resources(tmp_path: Path) -> None:
     with (
         patch("uqmm.builders.alpine.resolve_image", return_value=iso),
         patch("uqmm.builders.alpine.build_disk"),
+        patch(
+            "uqmm.builders.alpine.extract_alpine_boot_files",
+            return_value=(tmp_path / "vmlinuz", tmp_path / "initrd"),
+        ),
     ):
         artifacts = AlpineSeedBuilder().build(cfg, vm_dir)
 
@@ -147,6 +171,10 @@ def test_R10_build_writes_seeded_marker(tmp_path: Path) -> None:
     with (
         patch("uqmm.builders.alpine.resolve_image", return_value=iso),
         patch("uqmm.builders.alpine.build_disk"),
+        patch(
+            "uqmm.builders.alpine.extract_alpine_boot_files",
+            return_value=(tmp_path / "vmlinuz", tmp_path / "initrd"),
+        ),
     ):
         AlpineSeedBuilder().build(_base_cfg(), vm_dir)
     assert (vm_dir / "state.seeded").exists()
@@ -161,6 +189,10 @@ def test_R10_marker_idempotent(tmp_path: Path) -> None:
     with (
         patch("uqmm.builders.alpine.resolve_image", return_value=iso),
         patch("uqmm.builders.alpine.build_disk"),
+        patch(
+            "uqmm.builders.alpine.extract_alpine_boot_files",
+            return_value=(tmp_path / "vmlinuz", tmp_path / "initrd"),
+        ),
     ):
         AlpineSeedBuilder().build(cfg, vm_dir)
         AlpineSeedBuilder().build(cfg, vm_dir)  # second call — no error
@@ -182,7 +214,13 @@ def test_R10_rebuild_seed_regenerates_answers_without_disk(tmp_path: Path) -> No
         ssh_port=22500,
         ssh_authorized_keys=["ssh-ed25519 BBB new@host"],
     )
-    with patch("uqmm.builders.alpine.resolve_image", return_value=iso):
+    with (
+        patch("uqmm.builders.alpine.resolve_image", return_value=iso),
+        patch(
+            "uqmm.builders.alpine.extract_alpine_boot_files",
+            return_value=(tmp_path / "vmlinuz", tmp_path / "initrd"),
+        ),
+    ):
         artifacts = AlpineSeedBuilder().rebuild_seed(cfg_new, vm_dir)
 
     answers = (vm_dir / "answers").read_text()

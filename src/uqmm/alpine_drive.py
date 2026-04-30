@@ -62,8 +62,10 @@ def drive_install(
     sees that via QMP SHUTDOWN or process.wait().
     """
 
-    # 1. live-ISO login (root, no password)
-    _expect_or_panic(spawn, "login: ", timeout=180)
+    # 1. live-ISO login (root, no password). Under TCG without KVM the live
+    # ISO's apk-install-into-tmpfs phase + OpenRC init takes 5–8 min on
+    # modest host CPU, so this needs a generous deadline.
+    _expect_or_panic(spawn, "login: ", timeout=900)
     spawn.sendline("root")
     _expect_or_panic(spawn, "# ", timeout=15)
 
@@ -83,7 +85,13 @@ def drive_install(
     )
 
     # 5. confirm installer success before trusting the shell prompt.
-    _expect_or_panic(spawn, "UQMM_INSTALL_DONE", timeout=900)
+    # Anchor on a leading newline so we match the marker as printed by `echo`
+    # (its own line, preceded by setup-alpine's last `\n`) instead of the
+    # shell's command-line echo, where `UQMM_INSTALL_DONE` appears in the
+    # middle of the typed line. Without the anchor the first expect matches
+    # the typed command immediately and the next `# ` expect races against
+    # setup-alpine still running.
+    _expect_or_panic(spawn, r"\nUQMM_INSTALL_DONE", timeout=1800)
     _expect_or_panic(spawn, "# ", timeout=30)
 
     # 6. reboot into the installed system.

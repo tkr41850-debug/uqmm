@@ -48,7 +48,7 @@ def test_drive_install_happy_path() -> None:
             "# ",
             "# ",
             "# ",
-            "UQMM_INSTALL_DONE",
+            r"\nUQMM_INSTALL_DONE",
             "# ",
         ]
     )
@@ -91,7 +91,7 @@ def test_drive_install_does_not_send_password_prompts() -> None:
             "# ",
             "# ",
             "# ",
-            "UQMM_INSTALL_DONE",
+            r"\nUQMM_INSTALL_DONE",
             "# ",
         ]
     )
@@ -112,7 +112,7 @@ def test_drive_install_uses_provided_url() -> None:
             "# ",
             "# ",
             "# ",
-            "UQMM_INSTALL_DONE",
+            r"\nUQMM_INSTALL_DONE",
             "# ",
         ]
     )
@@ -128,7 +128,7 @@ def test_drive_install_does_not_close_spawn() -> None:
             "# ",
             "# ",
             "# ",
-            "UQMM_INSTALL_DONE",
+            r"\nUQMM_INSTALL_DONE",
             "# ",
         ]
     )

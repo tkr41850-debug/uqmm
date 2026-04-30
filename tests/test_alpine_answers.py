@@ -74,3 +74,30 @@ def test_answers_uses_openssh_not_dropbear() -> None:
     rendered = render_answers(make_cfg())
     assert "SSHDOPTS=" in rendered
     assert "openssh" in rendered
+
+
+def test_answers_apkrepos_includes_version_path() -> None:
+    # setup-apkrepos in 3.21 writes its positional URL arg verbatim — it does
+    # NOT auto-append /v$VER/main as the wiki suggests. Without an explicit
+    # version path, apk fetches end up at /alpine/x86_64/APKINDEX.tar.gz
+    # (no version) and `setup-disk -m sys` errors on syslinux.
+    rendered = render_answers(make_cfg(version="3.21"))
+    apkrepos_line = next(ln for ln in rendered.splitlines() if ln.startswith("APKREPOSOPTS="))
+    assert "/v3.21/main" in apkrepos_line
+
+
+def test_answers_dnsopts_names_a_resolver() -> None:
+    # An empty DNSOPTS makes setup-dns clobber /etc/resolv.conf. Pin
+    # SLiRP's built-in resolver.
+    rendered = render_answers(make_cfg())
+    assert 'DNSOPTS=""' not in rendered
+    assert "10.0.2.3" in rendered
+
+
+def test_answers_useropts_has_no_embedded_quotes() -> None:
+    # The answers file is sourced by sh; embedded single quotes are kept
+    # literally on word-split, so `-g 'wheel,…'` would pass the group
+    # `'wheel` to addgroup. The list has no whitespace — leave it bare.
+    rendered = render_answers(make_cfg(user="alice"))
+    useropts_line = next(ln for ln in rendered.splitlines() if ln.startswith("USEROPTS="))
+    assert "'" not in useropts_line
