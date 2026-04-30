@@ -28,7 +28,7 @@ class VMConfig:
     disk_size_gb: int = 20
 
     ssh_port: int | None = None
-    user: str = "uqmm"
+    user: str = "root"
     ssh_authorized_keys: list[str] = field(default_factory=list)
     hostname: str | None = None
 

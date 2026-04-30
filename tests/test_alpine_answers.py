@@ -25,6 +25,7 @@ def test_answers_contains_required_keys() -> None:
         "APKREPOSOPTS",
         "USEROPTS",
         "USERSSHKEY",
+        "ROOTSSHKEY",
         "SSHDOPTS",
         "NTPOPTS",
         "DISKOPTS",
@@ -101,3 +102,24 @@ def test_answers_useropts_has_no_embedded_quotes() -> None:
     rendered = render_answers(make_cfg(user="alice"))
     useropts_line = next(ln for ln in rendered.splitlines() if ln.startswith("USEROPTS="))
     assert "'" not in useropts_line
+
+
+def test_answers_root_user_routes_keys_to_rootsshkey() -> None:
+    # When user=="root", setup-alpine should create no extra account and
+    # land the SSH key in /root/.ssh/authorized_keys via ROOTSSHKEY.
+    rendered = render_answers(
+        make_cfg(user="root", ssh_authorized_keys=["ssh-ed25519 AAA root-key"])
+    )
+    assert 'USEROPTS=""' in rendered
+    assert 'USERSSHKEY=""' in rendered
+    rootsshkey_line = next(ln for ln in rendered.splitlines() if ln.startswith("ROOTSSHKEY="))
+    assert "ssh-ed25519 AAA root-key" in rootsshkey_line
+
+
+def test_answers_non_root_user_leaves_rootsshkey_empty() -> None:
+    rendered = render_answers(
+        make_cfg(user="alice", ssh_authorized_keys=["ssh-ed25519 AAA alice-key"])
+    )
+    assert 'ROOTSSHKEY=""' in rendered
+    usersshkey_line = next(ln for ln in rendered.splitlines() if ln.startswith("USERSSHKEY="))
+    assert "ssh-ed25519 AAA alice-key" in usersshkey_line

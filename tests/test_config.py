@@ -18,7 +18,7 @@ def test_defaults() -> None:
     assert cfg.memory_mb == 2048
     assert cfg.disk_size_gb == 20
     assert cfg.ssh_port is None
-    assert cfg.user == "uqmm"
+    assert cfg.user == "root"
     assert cfg.ssh_authorized_keys == []
     assert cfg.hostname is None
     assert cfg.state == "created"

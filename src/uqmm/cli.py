@@ -54,7 +54,7 @@ def create(
     ssh_port: Annotated[
         int | None, Parameter(help="Port to forward to guest:22; default: auto 22000-23000")
     ] = None,
-    user: str = "uqmm",
+    user: str = "root",
     key: Annotated[
         list[Path] | None, Parameter(help="Public-key path(s); repeat for multiple")
     ] = None,

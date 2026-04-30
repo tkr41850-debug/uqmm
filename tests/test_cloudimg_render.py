@@ -73,6 +73,31 @@ def test_user_data_hostname_falls_back_to_name() -> None:
     assert parsed["hostname"] == "vm1"
 
 
+def test_user_data_root_user_uses_root_with_disable_root_false() -> None:
+    # cfg.user == "root" should: opt out of cloud-init's default disable_root
+    # (which prepends a no-port-forwarding command="..." to root's
+    # authorized_keys), and write the key to root directly with no sudo
+    # entry (root has it implicitly).
+    cfg = make_cfg(user="root", ssh_authorized_keys=["ssh-ed25519 AAA root-key"])
+    parsed: dict[str, object] = yaml.safe_load(render_user_data(cfg))
+    assert parsed.get("disable_root") is False
+    users_raw = parsed["users"]
+    assert isinstance(users_raw, list)
+    users: list[dict[str, object]] = users_raw  # pyright: ignore[reportAssignmentType, reportUnknownVariableType]
+    assert len(users) == 1
+    root = users[0]
+    assert root["name"] == "root"
+    assert root["ssh_authorized_keys"] == ["ssh-ed25519 AAA root-key"]
+    assert "sudo" not in root
+
+
+def test_user_data_non_root_leaves_disable_root_at_default() -> None:
+    # Don't set disable_root explicitly when creating a normal user — keep
+    # cloud-init's default behavior intact for that path.
+    parsed: dict[str, object] = yaml.safe_load(render_user_data(make_cfg(user="alice")))
+    assert "disable_root" not in parsed
+
+
 def test_meta_data_local_hostname() -> None:
     parsed = yaml.safe_load(render_meta_data(make_cfg(name="vm1", hostname="alpha")))
     assert parsed["local-hostname"] == "alpha"

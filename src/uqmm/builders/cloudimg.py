@@ -20,20 +20,23 @@ from uqmm.resolve import resolve_image
 def render_user_data(cfg: VMConfig) -> str:
     """Render the cloud-init #cloud-config document for `cfg`.
 
-    Disables password auth, skips package upgrade (slow under TCG), creates
-    the configured user with the supplied SSH keys + passwordless sudo,
-    enables qemu-guest-agent (preinstalled on Ubuntu, on Debian via runcmd —
-    needed for clean QMP-driven shutdown later).
+    Disables password auth, skips package upgrade (slow under TCG), enables
+    qemu-guest-agent (preinstalled on Ubuntu, on Debian via runcmd — needed
+    for clean QMP-driven shutdown later).
+
+    For `cfg.user == "root"`: opts out of cloud-init's default `disable_root`
+    (which prepends a `command="echo 'Please login as ...'"` to root's
+    authorized_keys) and writes the keys to root directly. Distro default
+    sshd ships `PermitRootLogin prohibit-password` so pubkey-only root SSH
+    works without sshd_config edits. No sudo/shell entries — root has them
+    implicitly. Supplying `users:` without `default` also skips creation of
+    the distro default user (`debian`/`ubuntu`).
+
+    For other users: creates the named account with passwordless sudo + bash
+    shell, leaves `disable_root` at the cloud-init default (true).
     """
-    user_block: dict[str, Any] = {
-        "name": cfg.user,
-        "sudo": "ALL=(ALL) NOPASSWD:ALL",
-        "shell": "/bin/bash",
-        "ssh_authorized_keys": list(cfg.ssh_authorized_keys),
-    }
     body: dict[str, Any] = {
         "hostname": cfg.effective_hostname(),
-        "users": [user_block],
         "ssh_pwauth": False,
         "package_update": False,
         "package_upgrade": False,
@@ -43,6 +46,23 @@ def render_user_data(cfg: VMConfig) -> str:
             ["sh", "-c", "systemctl enable --now qemu-guest-agent || true"],
         ],
     }
+    if cfg.user == "root":
+        body["disable_root"] = False
+        body["users"] = [
+            {
+                "name": "root",
+                "ssh_authorized_keys": list(cfg.ssh_authorized_keys),
+            }
+        ]
+    else:
+        body["users"] = [
+            {
+                "name": cfg.user,
+                "sudo": "ALL=(ALL) NOPASSWD:ALL",
+                "shell": "/bin/bash",
+                "ssh_authorized_keys": list(cfg.ssh_authorized_keys),
+            }
+        ]
     return "#cloud-config\n" + yaml.safe_dump(body, sort_keys=False, default_flow_style=False)
 
 

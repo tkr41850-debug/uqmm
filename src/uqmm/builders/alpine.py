@@ -24,8 +24,21 @@ def render_answers(cfg: VMConfig) -> str:
     documented spelling inconsistencies. Field set chosen to match a 3.21
     canonical skeleton.
     """
-    user_keys = "\n".join(cfg.ssh_authorized_keys)
+    keys_joined = "\n".join(cfg.ssh_authorized_keys)
     hostname = cfg.effective_hostname()
+    # When cfg.user == "root", skip non-root user creation (USEROPTS empty)
+    # and route the keys to root via ROOTSSHKEY. setup-alpine -e leaves root
+    # with an empty password; sshd's default `PermitRootLogin prohibit-password`
+    # blocks password auth over SSH but allows pubkey, so root SSH with key
+    # works without further sshd_config edits.
+    if cfg.user == "root":
+        useropts = ""
+        usersshkey = ""
+        rootsshkey = keys_joined
+    else:
+        useropts = f"-a -u -g wheel,audio,video,netdev {cfg.user}"
+        usersshkey = keys_joined
+        rootsshkey = ""
     # Three non-obvious points:
     # - DNSOPTS must name a resolver. setup-dns rewrites /etc/resolv.conf
     #   from these flags, so an empty value clobbers the one udhcpc set
@@ -57,8 +70,9 @@ DNSOPTS="-n 10.0.2.3"
 TIMEZONEOPTS="-z UTC"
 PROXYOPTS="none"
 APKREPOSOPTS="{repo_url}"
-USEROPTS="-a -u -g wheel,audio,video,netdev {cfg.user}"
-USERSSHKEY="{user_keys}"
+USEROPTS="{useropts}"
+USERSSHKEY="{usersshkey}"
+ROOTSSHKEY="{rootsshkey}"
 SSHDOPTS="-c openssh"
 NTPOPTS="-c chrony"
 DISKOPTS="-m sys -s 0 /dev/vda"
