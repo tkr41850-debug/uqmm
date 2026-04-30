@@ -7,15 +7,28 @@ import pytest
 from uqmm.ssh import wait_ready
 
 
-def _serve_banner(port: int, banner: bytes) -> None:
-    """One-shot SSH-like server that writes `banner` then closes."""
-    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as srv:
-        srv.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
-        srv.bind(("127.0.0.1", port))
-        srv.listen(1)
+def _serve_banner(srv: socket.socket, banner: bytes) -> None:
+    """Accept one connection on `srv`, write `banner`, then return.
+
+    Caller owns `srv` (bind/listen and final close). If the caller closes
+    `srv` while `accept()` is blocked — the failure-path cleanup when the
+    client never connects — the syscall raises OSError and we exit cleanly
+    so the worker thread can be joined.
+    """
+    try:
         conn, _ = srv.accept()
-        with conn:
-            conn.sendall(banner)
+    except OSError:
+        return
+    with conn:
+        conn.sendall(banner)
+
+
+def _bound_listener() -> socket.socket:
+    s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+    s.bind(("127.0.0.1", 0))
+    s.listen(1)
+    return s
 
 
 def _free_port() -> int:
@@ -26,12 +39,16 @@ def _free_port() -> int:
 
 @pytest.mark.asyncio
 async def test_wait_ready_succeeds_when_banner_correct() -> None:
-    port = _free_port()
-    t = threading.Thread(target=_serve_banner, args=(port, b"SSH-2.0-OpenSSH_9.6\r\n"))
+    srv = _bound_listener()
+    port = srv.getsockname()[1]
+    t = threading.Thread(
+        target=_serve_banner, args=(srv, b"SSH-2.0-OpenSSH_9.6\r\n"), daemon=True
+    )
     t.start()
     try:
         await wait_ready("127.0.0.1", port, timeout=5.0)
     finally:
+        srv.close()
         t.join(timeout=2.0)
 
 
@@ -45,14 +62,20 @@ async def test_wait_ready_times_out_when_nothing_listens() -> None:
 
 @pytest.mark.asyncio
 async def test_wait_ready_rejects_non_ssh_banner() -> None:
-    port = _free_port()
-    t = threading.Thread(target=_serve_banner, args=(port, b"HTTP/1.1 200 OK\r\n"))
+    # Pre-bind so wait_ready's first connect can never lose a race against
+    # the worker's bind/listen — otherwise the worker stays blocked in
+    # accept() and (formerly, as a non-daemon thread) hung pytest at exit.
+    srv = _bound_listener()
+    port = srv.getsockname()[1]
+    t = threading.Thread(
+        target=_serve_banner, args=(srv, b"HTTP/1.1 200 OK\r\n"), daemon=True
+    )
     t.start()
     try:
-        # Non-SSH banner: keep retrying until the deadline.
         with pytest.raises(TimeoutError):
             await wait_ready("127.0.0.1", port, timeout=0.5)
     finally:
+        srv.close()
         t.join(timeout=2.0)
 
 
@@ -61,9 +84,17 @@ async def test_wait_ready_retries_until_listener_appears() -> None:
     port = _free_port()
 
     async def delayed_serve() -> None:
-        # Wait a bit, then start the listener so the first few attempts fail.
+        # Bind late on purpose — the first connect attempts must see
+        # ECONNREFUSED so the retry path in wait_ready is exercised.
         await asyncio.sleep(0.4)
-        await asyncio.to_thread(_serve_banner, port, b"SSH-2.0-OpenSSH_9.6\r\n")
+        srv = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        srv.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+        srv.bind(("127.0.0.1", port))
+        srv.listen(1)
+        try:
+            await asyncio.to_thread(_serve_banner, srv, b"SSH-2.0-OpenSSH_9.6\r\n")
+        finally:
+            srv.close()
 
     server_task = asyncio.create_task(delayed_serve())
     try:
