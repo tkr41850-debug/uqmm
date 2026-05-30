@@ -34,7 +34,7 @@ from uqmm.qemu import process as qemu_process
 from uqmm.qemu import qmp
 from uqmm.qemu.serial import open_serial
 from uqmm.serve import serve_answers_once
-from uqmm.ssh import wait_ready
+from uqmm.ssh import wait_ready, wait_ready_or_pid_stop
 
 # version_flags=() disables cyclopts' built-in --version (which would otherwise
 # eat `create --version <ver>` and short-circuit before the subcommand runs).
@@ -446,14 +446,16 @@ async def _launch_qemu(args: list[str], pidfile: Path, stderr_log: Path) -> Proc
     return await qemu_process.launch(args, pidfile=pidfile, stderr_log=stderr_log)
 
 
-async def _wait_ssh_ready(host: str, port: int) -> None:
+async def _wait_ssh_ready(host: str, port: int, timeout: float | None = 1200.0) -> None:  # noqa: ASYNC109
     """Indirection so tests can patch this without touching ssh module."""
-    await wait_ready(host, port)
+    await wait_ready(host, port, timeout=timeout)
 
 
-async def _wait_ssh_or_exit(proc: Process, host: str, port: int) -> None:
+async def _wait_ssh_or_exit(
+    proc: Process, host: str, port: int, timeout: float | None = 1200.0  # noqa: ASYNC109
+) -> None:
     """Race SSH readiness against process exit. Indirection for test patching."""
-    ssh_task: asyncio.Task[None] = asyncio.create_task(_wait_ssh_ready(host, port))
+    ssh_task: asyncio.Task[None] = asyncio.create_task(_wait_ssh_ready(host, port, timeout=timeout))
     proc_task: asyncio.Task[int] = asyncio.create_task(proc.wait())
     done, pending = await asyncio.wait({ssh_task, proc_task}, return_when=asyncio.FIRST_COMPLETED)
     for t in pending:
@@ -465,6 +467,11 @@ async def _wait_ssh_or_exit(proc: Process, host: str, port: int) -> None:
         raise RuntimeError(f"qemu exited with code {code} before SSH became ready; see install.log")
     if ssh_task in done:
         ssh_task.result()
+
+
+async def _wait_ssh_or_pid_stop(host: str, port: int, pidfile: Path) -> None:
+    """Race SSH readiness against PID death. Indirection for test patching."""
+    await wait_ready_or_pid_stop(host, port, pidfile)
 
 
 _DEFAULT_KEY_NAMES = ("id_ed25519.pub", "id_rsa.pub")
@@ -692,7 +699,7 @@ def ssh(
     name: str,
     *args: Annotated[str, Parameter(allow_leading_hyphen=True)],
 ) -> int:
-    """Resolve port + exec system ssh with passthrough args."""
+    """Resolve port; autostart VM if needed; exec system ssh with passthrough args."""
     vm_dir = state.vm_dir(name)
     if not (vm_dir / "config.json").exists():
         print(f"no such VM: {name}", file=sys.stderr)
@@ -701,11 +708,51 @@ def ssh(
     if cfg.ssh_port is None:
         print(f"{name} has no SSH port allocated", file=sys.stderr)
         return 1
-    status = asyncio.run(probe(vm_dir))
-    if status not in ("running", "unreachable"):
-        # `unreachable` still gets the exec — user might be debugging.
-        print(f"{name} is {status}; start it first", file=sys.stderr)
+    return asyncio.run(_ssh(cfg, vm_dir, args))
+
+
+async def _ssh(
+    cfg: VMConfig,
+    vm_dir: Path,
+    args: tuple[str, ...],
+) -> int:
+    status = await probe(vm_dir)
+
+    if status in ("not-created", "invalid-config"):
+        print(f"{cfg.name} is {status}; create it first", file=sys.stderr)
         return 1
+    if status == "failed":
+        print(f"{cfg.name} is in failed state; delete and recreate", file=sys.stderr)
+        return 1
+
+    if status == "stopped":
+        builder = AlpineSeedBuilder() if cfg.os == "alpine" else CloudImageBuilder()
+        try:
+            runtime_args = builder.runtime_args(cfg, vm_dir)
+        except FileNotFoundError as e:
+            print(f"missing artifact: {e}", file=sys.stderr)
+            return 1
+        proc = await _launch_qemu(
+            runtime_args,
+            pidfile=vm_dir / "qemu.pid",
+            stderr_log=vm_dir / "install.log",
+        )
+        print(f"{cfg.name} started, waiting for SSH...", file=sys.stderr)
+        try:
+            await _wait_ssh_or_exit(proc, "127.0.0.1", cfg.ssh_port, timeout=None)
+        except RuntimeError as e:
+            print(e, file=sys.stderr)
+            await _kill_proc(proc)
+            (vm_dir / "qemu.pid").unlink(missing_ok=True)
+            return 1
+    elif status in ("starting", "unreachable"):
+        print(f"{cfg.name} is {status}, waiting for SSH...", file=sys.stderr)
+        try:
+            await _wait_ssh_or_pid_stop("127.0.0.1", cfg.ssh_port, vm_dir / "qemu.pid")
+        except RuntimeError as e:
+            print(e, file=sys.stderr)
+            return 1
+
     argv = [
         "ssh",
         "-p",
@@ -715,9 +762,6 @@ def ssh(
         f"{cfg.user}@127.0.0.1",
         *args,
     ]
-    # os.execvp replaces this process with ssh — the caller's TTY is
-    # connected directly, signals/resize/Ctrl-C all behave like running ssh
-    # by hand. Returns 1 only if exec itself fails (e.g. ssh binary missing).
     try:
         _os.execvp("ssh", argv)
     except FileNotFoundError:

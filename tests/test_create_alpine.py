@@ -198,7 +198,7 @@ def test_R10_create_writes_installed_marker_after_install_exit(
 
     installed_at_ssh_wait: list[bool] = []
 
-    async def _check_marker(host: str, port: int) -> None:
+    async def _check_marker(host: str, port: int, **kwargs: object) -> None:
         installed_at_ssh_wait.append((vm_dir_target / "state.installed").exists())
 
     with (

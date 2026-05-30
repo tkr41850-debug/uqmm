@@ -9,8 +9,10 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import os
 import time
 from collections.abc import Coroutine
+from pathlib import Path
 from typing import Any
 
 _BANNER_PREFIX = b"SSH-"
@@ -19,20 +21,15 @@ _BANNER_PREFIX = b"SSH-"
 async def wait_ready(
     host: str,
     port: int,
-    # 1200s covers an Alpine FIRST boot under TCG with 1–2 vcpus: sshd's
-    # initial RSA/ECDSA/ED25519 host-key generation is entropy-bound and
-    # the emulator has no /dev/hwrng, so 4096-bit RSA keygen alone can
-    # take 8+ min. Cloud-init guests reach SSH in 30–60s, and Alpine's
-    # second boot also lands under a minute (keys already generated) — so
-    # this is a generous first-boot ceiling, not the typical wait.
-    timeout: float = 1200.0,  # noqa: ASYNC109 — explicit timeout matches caller ergonomics
+    timeout: float | None = 1200.0,  # noqa: ASYNC109 — explicit timeout matches caller ergonomics
 ) -> None:
     """Block until `host:port` answers with an SSH banner, or `timeout` elapses.
 
+    When *timeout* is ``None`` the loop runs indefinitely (no deadline).
     Raises TimeoutError on deadline. Per-attempt connect timeout is small so a
     silently-dropping host doesn't block the loop for long.
     """
-    deadline = time.monotonic() + timeout
+    deadline = float("inf") if timeout is None else time.monotonic() + timeout
     last_err: BaseException | None = None
     while time.monotonic() < deadline:
         try:
@@ -55,14 +52,15 @@ async def wait_ready(
         if banner.startswith(_BANNER_PREFIX):
             return
         await asyncio.sleep(1.0)
-    raise TimeoutError(f"SSH banner at {host}:{port} not seen within {timeout}s") from last_err
+    timeout_label = "" if timeout is None else f" within {timeout}s"
+    raise TimeoutError(f"SSH banner at {host}:{port} not seen{timeout_label}") from last_err
 
 
 async def wait_ready_or_proc_exit(
     host: str,
     port: int,
     proc_coro: Coroutine[Any, Any, int],
-    timeout: float = 1200.0,  # noqa: ASYNC109 — explicit timeout matches caller ergonomics
+    timeout: float | None = 1200.0,  # noqa: ASYNC109 — explicit timeout matches caller ergonomics
 ) -> None:
     """Race SSH readiness against process exit.
 
@@ -83,3 +81,48 @@ async def wait_ready_or_proc_exit(
         raise RuntimeError(f"qemu exited with code {code} before SSH became ready; see install.log")
     if ssh_task in done:
         ssh_task.result()
+
+
+async def wait_ready_or_pid_stop(
+    host: str,
+    port: int,
+    pidfile: Path,
+    timeout: float | None = None,  # noqa: ASYNC109 — explicit timeout matches caller ergonomics
+) -> None:
+    """Race SSH readiness against a pidfile-watched process death.
+
+    Polls the PID in *pidfile* every second.  Returns when SSH is ready,
+    or raises RuntimeError if the process dies first.
+    """
+    ssh_task: asyncio.Task[None] = asyncio.create_task(wait_ready(host, port, timeout=timeout))
+    watch_task: asyncio.Task[None] = asyncio.create_task(_watch_pid(pidfile))
+    done, pending = await asyncio.wait(
+        {ssh_task, watch_task},
+        return_when=asyncio.FIRST_COMPLETED,
+    )
+    for t in pending:
+        t.cancel()
+        with contextlib.suppress(asyncio.CancelledError):
+            await t
+    if watch_task in done and ssh_task not in done:
+        raise RuntimeError("QEMU process died before SSH became ready; check install.log")
+    if ssh_task in done:
+        ssh_task.result()
+
+
+async def _watch_pid(pidfile: Path) -> None:
+    """Return when the process identified by *pidfile* is no longer alive."""
+    while True:
+        if not await asyncio.to_thread(pidfile.exists):
+            return
+        try:
+            pid = int(await asyncio.to_thread(pidfile.read_text))
+        except (ValueError, OSError):
+            return
+        try:
+            await asyncio.to_thread(os.kill, pid, 0)
+            await asyncio.sleep(1.0)
+        except ProcessLookupError:
+            return
+        except PermissionError:
+            await asyncio.sleep(1.0)

@@ -1,10 +1,11 @@
 import asyncio
+import os
 import socket
 import threading
 
 import pytest
 
-from uqmm.ssh import wait_ready
+from uqmm.ssh import wait_ready, wait_ready_or_pid_stop
 
 
 def _serve_banner(srv: socket.socket, banner: bytes) -> None:
@@ -101,3 +102,46 @@ async def test_wait_ready_retries_until_listener_appears() -> None:
         await wait_ready("127.0.0.1", port, timeout=5.0)
     finally:
         await server_task
+
+
+@pytest.mark.asyncio
+async def test_wait_ready_none_timeout_succeeds() -> None:
+    """wait_ready with timeout=None succeeds when a banner arrives."""
+    srv = _bound_listener()
+    port = srv.getsockname()[1]
+    t = threading.Thread(
+        target=_serve_banner, args=(srv, b"SSH-2.0-OpenSSH_9.6\r\n"), daemon=True
+    )
+    t.start()
+    try:
+        await wait_ready("127.0.0.1", port, timeout=None)
+    finally:
+        srv.close()
+        t.join(timeout=2.0)
+
+
+@pytest.mark.asyncio
+async def test_wait_ready_or_pid_stop_raises_on_dead_pid(tmp_path: pytest.TempPathFactory) -> None:
+    """wait_ready_or_pid_stop raises RuntimeError when the PID is dead."""
+    pidfile = tmp_path / "qemu.pid"
+    pidfile.write_text("99999999\n")
+    with pytest.raises(RuntimeError, match="QEMU process died"):
+        await wait_ready_or_pid_stop("127.0.0.1", 0, pidfile)
+
+
+@pytest.mark.asyncio
+async def test_wait_ready_or_pid_stop_succeeds(tmp_path: pytest.TempPathFactory) -> None:
+    """wait_ready_or_pid_stop returns when SSH banner appears before PID dies."""
+    pidfile = tmp_path / "qemu.pid"
+    pidfile.write_text(f"{os.getpid()}\n")
+    srv = _bound_listener()
+    port = srv.getsockname()[1]
+    t = threading.Thread(
+        target=_serve_banner, args=(srv, b"SSH-2.0-OpenSSH_9.6\r\n"), daemon=True
+    )
+    t.start()
+    try:
+        await wait_ready_or_pid_stop("127.0.0.1", port, pidfile)
+    finally:
+        srv.close()
+        t.join(timeout=2.0)

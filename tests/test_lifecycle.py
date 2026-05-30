@@ -297,11 +297,57 @@ def test_ssh_passthrough_args(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -
     assert captured["argv"][-2:] == ["uname", "-a"]
 
 
-def test_ssh_refuses_stopped_vm(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+def test_ssh_autostarts_stopped_vm(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     monkeypatch.setenv("XDG_DATA_HOME", str(tmp_path / "data"))
-    _make_vm(tmp_path)
+    monkeypatch.setenv("XDG_CACHE_HOME", str(tmp_path / "cache"))
+    _make_vm(tmp_path, ssh_port=22500)
+    builder = MagicMock()
+    builder.runtime_args = MagicMock(return_value=["qemu-system-x86_64"])
+    fake_proc = MagicMock()
+    fake_proc.wait = AsyncMock(return_value=0)
+    captured: dict[str, list[str]] = {}
+
+    def fake_execvp(file: str, argv: list[str]) -> None:
+        captured["argv"] = argv
+
     with (
         patch("uqmm.cli.probe", new=AsyncMock(return_value="stopped")),
+        patch("uqmm.cli.CloudImageBuilder", return_value=builder),
+        patch("uqmm.cli._launch_qemu", new=AsyncMock(return_value=fake_proc)) as launch,
+        patch("uqmm.cli._wait_ssh_or_exit", new=AsyncMock()) as wait_ssh,
+        patch("uqmm.cli._os.execvp", side_effect=fake_execvp),
+    ):
+        rc = main(["ssh", "vm1"])
+    assert rc == 0
+    launch.assert_awaited_once()
+    wait_ssh.assert_awaited_once()
+    assert wait_ssh.call_args.kwargs.get("timeout") is None
+    assert captured["argv"][0] == "ssh"
+
+
+def test_ssh_waits_ssh_when_starting(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    monkeypatch.setenv("XDG_DATA_HOME", str(tmp_path / "data"))
+    _make_vm(tmp_path, ssh_port=22500)
+    captured: dict[str, list[str]] = {}
+
+    def fake_execvp(file: str, argv: list[str]) -> None:
+        captured["argv"] = argv
+
+    with (
+        patch("uqmm.cli.probe", new=AsyncMock(return_value="starting")),
+        patch("uqmm.cli._wait_ssh_or_pid_stop", new=AsyncMock()) as wait_ssh,
+        patch("uqmm.cli._os.execvp", side_effect=fake_execvp),
+    ):
+        rc = main(["ssh", "vm1"])
+    assert rc == 0
+    wait_ssh.assert_awaited_once()
+    assert captured["argv"][0] == "ssh"
+
+
+def test_ssh_refuses_failed_vm(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    monkeypatch.setenv("XDG_DATA_HOME", str(tmp_path / "data"))
+    _make_vm(tmp_path, state="failed")
+    with (
         patch("uqmm.cli._os.execvp") as execvp,
     ):
         rc = main(["ssh", "vm1"])
